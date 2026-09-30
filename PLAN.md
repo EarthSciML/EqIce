@@ -9,10 +9,10 @@ living document: update it as components are instrumented, migrated, and merged.
 
 - Goal: a top-level `eqice.esm` model, assembled by reference from individual
   `.esm` components, that reproduces PISM simulations.
-- The original PISM implementation (hereafter "the fortran codes") is the
+- The original PISM implementation (hereafter "the C++ codes") is the
   reference for physics and numerics. Components that already exist in
   [EarthSciModels](https://github.com/EarthSciML/EarthSciModels) must be reused
-  (and their tests extended from instrumented fortran outputs), not duplicated.
+  (and their tests extended from instrumented C++ outputs), not duplicated.
 - All model logic lives in `.esm` files. Tests and examples live in the
   `tests` and `analysis` sections of `.esm` files.
 - All local tests run through the EarthSciAST Rust CLI binary, kept untracked
@@ -36,7 +36,7 @@ living document: update it as components are instrumented, migrated, and merged.
   enthalpy/heat transport) may already exist as components or discretization
   rules; add tests rather than re-deriving.
 - **No scripts for equation authoring.** Scripts may only (a) extract numeric
-  test tuples from fortran dumps into a hand-authored `tests` block, and (b)
+  test tuples from C++ dumps into a hand-authored `tests` block, and (b)
   translate tabular data (lookup tables, `.eqn` reaction lists) into
   `function_tables`/`reaction_systems`/`data_sources`.
 
@@ -62,11 +62,11 @@ instrumentation.
 Each row becomes one or more component PRs into EarthSciModels (stage 2). The
 top-level `eqice.esm` (stage 3) composes the merged components.
 
-## 4. Stage 1 — Instrument the fortran codes
+## 4. Stage 1 — Instrument the C++ codes
 
 Purpose: produce authoritative input/output traces to build tests from.
 
-1. Identify discrete subassembly boundaries in the fortran codes matching the
+1. Identify discrete subassembly boundaries in the C++ codes matching the
    component inventory above.
 2. Instrument each boundary to dump inputs and outputs during simulation.
    Prefer **instantaneous derivatives**; use integrated trajectories only where
@@ -91,7 +91,7 @@ For each component (bottom-up; leaf physics first, then subassemblies):
    equations are placeholders (or absent) so tests initially fail/define the
    contract.
 2. **Fill in the physics** in the stub so the tests pass:
-   - Author equations as math (PDEs where the fortran discretizes PDEs),
+   - Author equations as math (PDEs where the C++ discretizes PDEs),
      importing discretization rules from EarthSciDiscretizations.
    - Factor repeated math into `expression_templates` and import them by
      reference.
@@ -109,7 +109,7 @@ For each component (bottom-up; leaf physics first, then subassemblies):
 1. Import the merged components by reference into `eqice.esm`.
 2. Add the couplings (stress balance ↔ energy, basal resistance ↔ hydrology,
    surface/ocean forcing, bed deformation, calving/front retreat).
-3. Test against full-fortran-model simulations (integrated trajectories over
+3. Test against full-C++-model simulations (integrated trajectories over
    realistic domains), using the same run configurations as Stage 1.
 4. Iterate on coupling order/timestep and any subassembly discrepancies.
 
@@ -121,19 +121,19 @@ eqice/
   PLAN.md              # this document
   <rust CLI binary>    # untracked local EarthSciAST runner
   stage1/
-    dumps/             # instrumented fortran I/O traces (referenced by tests)
+    dumps/             # instrumented C++ I/O traces (referenced by tests)
     runs/              # run configurations
   stage2/
     <component>.esm    # working stubs/physics before merging upstream
   stage3/
     eqice.esm          # top-level coupled model
-  bugs.md              # centralized list of bugs/errors found in fortran
+  bugs.md              # centralized list of bugs/errors found in C++
 ```
 
 Components that pass review are removed from `stage2/` once merged into
 EarthSciModels and imported by reference from there.
 
-## 8. Centralized fortran bug list
+## 8. Centralized C++ bug list
 
 Maintain `bugs.md` (and a matching entry wherever AGENTS.md points). Record for
 each bug: location (file:line/function), description, impact on results,
@@ -143,7 +143,7 @@ whether the `.esm` reproduces or corrects it, and status.
 
 - Leaf physics: instantaneous-derivative tuples (preferred).
 - Subassemblies: composed-component tests with the same tuples.
-- Full model: integrated trajectories vs. full fortran simulations.
+- Full model: integrated trajectories vs. full C++ simulations.
 - All tests are inline `tests` blocks runnable by the Rust CLI locally and by
   the EarthSciModels CI gate on merge.
 
