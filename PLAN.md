@@ -70,17 +70,25 @@ Purpose: produce authoritative input/output traces to build tests from.
 built in `stage1/build/`; reference run configs in `stage1/runs/README.md`;
 boundary catalog in `stage1/boundaries.md`). Milestone 2 complete — rheology,
 SIA, and SSA boundaries instrumented. Milestone 3 in progress — the energy,
-age, basal-strength, hydrology (Routing), bed (PointwiseIsostasy), and
-calving/front-retreat + frontal-melt boundaries are now instrumented too
-(drivers in `stage1/instrument/`, dumps in `stage1/dumps/`, run configs in
-`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving}.json`).
+age, basal-strength, hydrology (Routing), bed (PointwiseIsostasy),
+calving/front-retreat + frontal-melt, and surface/ocean forcing boundaries are
+now instrumented too (drivers in `stage1/instrument/`, dumps in
+`stage1/dumps/`, run configs in
+`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving,surface_ocean}.json`).
 The calving boundary (test V / van der Veen CFBC shelf, square 65×65 grid)
 covers EigenCalving, vonMisesCalving, HayhurstCalving, CalvingAtThickness +
 FloatKill, the FrontalMeltPhysics kernels, and the Constant frontal-melt model;
 front-retreat geometry update and prescribed-retreat/Given/Discharge frontal-melt
-models are deferred.
+models are deferred. The surface/ocean boundary covers the PIK atmosphere
+(`martin` parameterization; test-F-exact radial dome on a Gaussian ocean
+trough bed with a latitude gradient), the PIK / Beckmann–Goosse ocean
+(shelf base temperature = linear pressure melting point, shelf base mass flux
+`Q/L` positive = melting, depth-averaged water column pressure) with a
+Constant-ocean cross-check, and the PIK surface (SMB partition, martin surface
+temperature) — see `PROGRESS.md` for the analytic checks and bugs.md #5
+(`ConstantPIK.cc` sign comment).
 Next: the remaining hydrology models (Distributed/SteadyState), the
-LingleClark/Given bed models, and the surface/ocean/geometry boundaries.
+LingleClark/Given bed models, and the geometry (ice geometry update) boundary.
 See `PROGRESS.md`.
 
 1. Identify discrete subassembly boundaries in the C++ codes matching the
@@ -181,9 +189,15 @@ whether the `.esm` reproduces or corrects it, and status.
    65×65 grid: EigenCalving, vonMisesCalving, HayhurstCalving,
    CalvingAtThickness + FloatKill, FrontalMeltPhysics kernels, Constant
    frontal-melt model; front-retreat geometry update and prescribed-retreat /
-   Given / Discharge frontal-melt models deferred) done; next: the remaining
-   hydrology models (Distributed, SteadyState/EmptyingProblem, NullTransport
-   cross-check), surface/ocean/geometry.
+   Given / Discharge frontal-melt models deferred), and surface/ocean forcing
+   (`instrument_surface_ocean.cc`, PIK atmosphere `martin` +
+   driver-prescribed precipitation + flat yearly-cycle time series, PIK /
+   Beckmann–Goosse ocean + Constant cross-check on the test-F dome over a
+   Gaussian ocean trough with a latitude gradient, PIK surface SMB partition;
+   Given/Forcing atmosphere and ocean and Given/Delta_T surface models
+   deferred) done; next: the remaining hydrology models (Distributed,
+   SteadyState/EmptyingProblem, NullTransport cross-check), the LingleClark /
+   Given bed models, and the geometry (ice geometry update) boundary.
 4. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
    bed → surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.

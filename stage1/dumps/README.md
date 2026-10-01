@@ -23,6 +23,7 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 | `hydrology/` | Subglacial hydrology (Routing/Shreve, one dt step, test-F geometry) | `instrument/instrument_hydrology.cc` | `runs/hydrology.json` | `instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25` |
 | `bed/` | Bed deformation (PointwiseIsostasy, two update intervals, test-F load history) | `instrument/instrument_bed.cc` | `runs/bed.json` | `instrument/instrument_bed -Mx 31 -My 31` |
 | `calving/` | Calving (Eigen / von Mises / Hayhurst / thickness / float-kill) + frontal melt (physics kernels + Constant) on the van der Veen CFBC shelf | `instrument/instrument_calving.cc` | `runs/calving.json` | `instrument/instrument_calving -Mx 65 -My 65` |
+| `surface_ocean/` | Atmosphere + ocean + surface forcing boundaries (PIK atmosphere, PIK / Beckmann–Goosse ocean + Constant cross-check, PIK surface) | `instrument/instrument_surface_ocean.cc` | `runs/surface_ocean.json` | `instrument/instrument_surface_ocean -Mx 31 -My 31` |
 
 The energy and age traces come from the same driver (they share the test-F
 state). All drivers accept `-dumps_dir <path>` to redirect the output; the
@@ -41,6 +42,7 @@ stage1/instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir stage1/dump
 stage1/instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir stage1/dumps/hydrology
 stage1/instrument/instrument_bed -Mx 31 -My 31 -dumps_dir stage1/dumps/bed
 stage1/instrument/instrument_calving -Mx 65 -My 65 -dumps_dir stage1/dumps/calving
+stage1/instrument/instrument_surface_ocean -Mx 31 -My 31 -dumps_dir stage1/dumps/surface_ocean
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -220,6 +222,60 @@ component must reproduce.
     rates are identical to the interior front cells (verified: the dumps are
     byte-for-byte deterministic across reruns). This is a latent model edge
     case, not something the `.esm` reimplementation needs to reproduce.
+- **Atmosphere / ocean / surface forcing** (`surface_ocean/`): the three
+  forcing-boundary model families on one shared 31×31 grid — the test-F exact
+  radial dome (extent 750 km) on a Gaussian ocean-trough bed
+  `bed(r) = -1500 - 1500 exp(-((r-450km)/200km)^2)` m, with latitude
+  `-70 + 10 y/Ly` deg north (a −80°..−60° latitudinal temperature gradient;
+  69 grounded / 448 floating / 444 ice-free cells).
+  - `atmosphere_temperature.csv`: the pointwise martin-2011 kernel
+    `(latitude, usurf) -> T_ma = 303.15 + 0.68775·lat - 0.0075·usurf`
+    (`T_ms = T_ma`, no seasonal cycle). The `air_temperature()` map matches
+    this exactly (max err 0 K); `atmosphere_precipitation.csv` is the
+    driver-prescribed field `P(r) = (200 + 100 cos(pi r/Lx))` kg m^-2 yr^-1
+    (the real model reads it from a file), and
+    `atmosphere_temperature_timeseries.csv` verifies the yearly-cycle time
+    series is flat for martin (zero amplitude cosine).
+  - `shelf_base_temperature.csv`: the pointwise pressure-melting-point kernel
+    `T_shelf = T0 - beta_CC rho_i g H` (max err 0 K). **This is the linear
+    pressure melting point and *decreases* with depth** — `T_shelf(2000) =
+    271.7395 K` vs `T_shelf(0) = 273.15 K`; the naive "deep cavity → T_max"
+    expectation is wrong for this model. The same value is used by the
+    Constant ocean (cross-check, max err 0 K).
+  - `beckmann_goosse_mass_flux.csv`: the pointwise kernel
+    `(H, z_b, T_f, T_ocean, ocean_heat_flux) -> mass_flux = Q/L` with
+    `Q = melt_factor rho_w c_p gamma_T (T_ocean - T_f)` and `z_b =
+    -(rho_i/rho_w) H` (max err 1.7e-21 kg m^-2 s^-1, round-off). **Positive =
+    melting** (the geometry update does `dH_BMB = -dt·mf/rho_i`); with the
+    default `T_ocean = -1.7 °C` the flux is positive everywhere:
+    `mf(0) = 1.229863e-06`, `mf(2000) = 9.501970e-06` kg m^-2 s^-1
+    (= 0.3295 m/yr), range [1.23e-06, 1.36e-05]. The `ConstantPIK.cc` comment
+    claiming the flux is "always negative" / "positive if freezing on" is a
+    documentation bug (bugs.md #5).
+  - `water_column_pressure.csv`: the pointwise kernel
+    `P = 0.5 rho_w g h_w^2 / H` — the **depth-averaged** water column pressure
+    at a margin (`h_w` = ocean depth below the ice base, 0 for `H = 0`),
+    *not* `rho_w g depth` (max err 0 Pa; `P(2000 m, bed -3000) =
+    7.902394e6 Pa`).
+  - `surface_partition.csv`: `smb -> accumulation = max(smb,0)`,
+    `melt = runoff = max(-smb,0)` (the `dummy_*` partition), so
+    `mass_flux = accumulation - runoff` always. The driver wires the coupling
+    that `surface::PIK` itself ignores (it holds SMB constant in real runs):
+    SMB = atmosphere precipitation minus a Gaussian ablation blob centered on
+    the warm-north floating shelf (peak 300 kg m^-2 yr^-1, sigma 250 km), so a
+    32-cell band of the floating shelf has melt > 0. The surface temperature
+    uses the *same* martin formula as the atmosphere, so the two maps are
+    field-for-field identical (max err 0 K).
+  - `columns.csv`: the per-cell trace of all maps plus the analytic references
+    (`T_ma`, `T_shelf`, `mf`, `P`) the component outputs must match;
+    `inputs.nc` has the geometry and all atmosphere/ocean/surface maps.
+  - Validation (see `runs/surface_ocean.json`): air temperature, shelf base
+    temperature, mass flux and water column pressure all match their analytic
+    references to round-off; the Constant-ocean cross-check matches the PIK
+    ocean on temperature and water column pressure and gives
+    `mf = melt_rate·rho_i = 1.497038e-06` kg m^-2 s^-1 everywhere; the
+    surface SMB partition identity and the surface==atmosphere temperature
+    identity hold to 0; all 32 melting cells are on the floating shelf.
 - The test-F/V states mean every dumped quantity has an exact reference value
   (or a clean null state, as with age = 0); the discrete-vs-exact differences
   are the expected discretization error of the C++ model, which the `.esm`

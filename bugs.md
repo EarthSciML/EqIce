@@ -80,6 +80,33 @@ impact, whether the `.esm` reproduces or corrects it, and status.
   upstream fix: compute `shelf_base_temperature` in `Constant::init_impl`, or
   move `m_ocean->update` before `energy_step` in `IceModel::step`.
 
+## 5. ConstantPIK.cc sign comment contradicts the code: shelf_base_mass_flux is positive for melting
+
+- **Location:** `src/coupler/ocean/ConstantPIK.cc` lines 136–137
+  (`PIK::mass_flux`, the Beckmann–Goosse sub-shelf parameterization).
+- **Description:** the comment claims "shelfbmassflux is positive if ice is
+  freezing on; here it is always negative" and "same sign as ocean_heat_flux
+  (positive if massflux FROM ice TO ocean)". Both claims are wrong for the
+  code that follows: `result = ocean_heat_flux / L`, with
+  `ocean_heat_flux = melt_factor * rho_w * c_p * gamma_T * (T_ocean - T_f)`
+  and `T_f = 273.15 + 0.0939 - 0.057*S + 7.64e-4*z_b` (`z_b = -(rho_i/rho_w) H
+  <= 0`). With the default `T_ocean = -1.7 C` the flux is **positive
+  everywhere** (`T_ocean - T_f > 0`), and the downstream consumers
+  (`IceModel::combine_basal_melt_rate` → `GeometryEvolution` with
+  `dH_BMB = -dt*mf/rho_i`) interpret a positive shelf-base mass flux as
+  **melting** (thickness loss). So the sign convention is "positive =
+  melting", the flux is never negative under the shelf, and the comment is
+  wrong on both points.
+- **Impact on results:** none (comment only) — but it is a trap for a
+  reimplementation: an `.esm` ocean-coupling component must reproduce
+  `mf = Q/L` positive = melting, not the comment's "always negative /
+  positive = freezing". The Stage-1 surface/ocean dumps record the actual
+  sign.
+- **Reproduced/corrected in .esm:** the surface/ocean Stage-1 traces record
+  `shelf_base_mass_flux > 0` (melting) under the shelf; the Stage-2
+  ocean-coupling component will reproduce the code (positive = melting).
+- **Status:** documented; candidate upstream comment fix.
+
 ## 4. StressBalance::Inputs::dump() aborts: writes an undefined config variable
 
 - **Location:** `src/stressbalance/StressBalance.cc`

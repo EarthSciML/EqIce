@@ -1,0 +1,78 @@
+{
+  "component": "surface_ocean",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "instantaneous_derivative",
+  "description": "Atmosphere / ocean / surface forcing-boundary traces: (a) the PIK atmosphere (atmosphere::PIK, default 'martin' parameterization): the mean-annual air_temperature() map T_ma = 303.15 + 0.68775*lat - 0.0075*usurf (K, lat in degrees north, so it is linear in latitude and surface elevation) and a prescribed constant-in-time precipitation() map (the real model reads it from a file; the driver prescribes P(r) = (200 + 100 cos(pi r / Lx)) kg m^-2 yr^-1), plus the pointwise latitude/elevation kernels and the yearly-cycle time series (flat for martin, T_ms = T_ma, verified through the component's own temp_time_series); (b) the PIK ocean (ocean::PIK, the Beckmann-Goosse-style parameterization): shelf_base_temperature() = the linear pressure melting point T0 - beta_CC rho_i g H (NOT a quadratic, and it DEcreases with depth -- see the checks), shelf_base_mass_flux() = Q/L with Q = melt_factor rho_w c_p gamma_T (T_ocean - T_f) and T_f = 273.15 + 0.0939 - 0.057 S + 7.64e-4 z_b, z_b = -(rho_i/rho_w) H (linear in H; positive = melting, always positive with the default T_ocean = -1.7 C), and average_water_column_pressure() = 0.5 rho_w g h_w^2 / H over the ice column at a margin (NOT rho_w g depth -- the depth-averaged form), with the maps and pointwise depth kernels; plus the Constant ocean (trivial cross-check) maps; (c) the PIK surface (surface::PIK): accumulation(), melt(), runoff(), mass_flux() and temperature() maps, with SMB prescribed as the atmosphere precipitation minus a deterministic Gaussian ablation blob on the warm-north floating shelf (surface::PIK holds SMB constant from a file in real runs and ignores the atmosphere pointer; the driver wires the coupling). surface::PIK partitions SMB with dummy_accumulation/dummy_melt/dummy_runoff (accumulation = max(smb,0), melt = runoff = max(-smb,0)) and its temperature uses the same Martin 2011 formula as the atmosphere, so surface temperature == atmosphere air_temperature field-for-field.",
+  "regenerate": {
+    "command": "source stage1/runs/env.sh && stage1/instrument/instrument_surface_ocean -Mx 31 -My 31 -dumps_dir stage1/dumps/surface_ocean",
+    "note": "Run from the repo root (the -dumps_dir path is relative to the working directory). Override the grid with -Mx/-My and the output with -dumps_dir. All models are constructed with default config (atmosphere.pik.parameterization = 'martin', ocean.pik_melt_factor = 5e-3, ocean.constant.melt_rate = 0.0519 m/yr, etc.); no -atmosphere/-ocean/-surface options are used."
+  },
+  "domain": {
+    "Lx_m": 900000,
+    "Ly_m": 900000,
+    "registration": "CELL_CENTER",
+    "periodicity": "NOT_PERIODIC",
+    "Mx": 31,
+    "My": 31,
+    "dx_m": 58064.516,
+    "note": "2-D grid only (the couplers are 2-D fields). Single grid shared by all three model families."
+  },
+  "setup": {
+    "geometry": {
+      "thickness": "verification test-F exact radial dome (Bueler, Brown, Lingle 2007): H(r) = Hconst lamhat^power, H0 = 3000 m, extent 750 km, 0 outside",
+      "bed": "Gaussian ocean trough/cavity: bed(r) = -1500 - 1500 exp(-((r - 450 km)/200 km)^2) m (r = 0: -1509.5 m; r = 450 km: -3000 m trough under the mid-shelf; r = 900 km: -1509.5 m)",
+      "sea_level": "0 m",
+      "latitude": "-70 + 10 y/Ly deg north (linear in y, spanning -80 at the south edge to -60 at the north edge) -> a clear latitudinal temperature gradient of 0.68775 K/deg",
+      "longitude": "0 everywhere (the martin parameterization does not use it)",
+      "cell_types": "69 grounded (dome center, H > flotation thickness), 448 floating (shelf over the cavity), 444 ice-free ocean (r > 750 km)"
+    },
+    "models": {
+      "atmosphere": "atmosphere::PIK with atmosphere.pik.parameterization = 'martin' (default); precipitation prescribed by the driver (init_impl subclassed to skip the file read)",
+      "ocean": "ocean::PIK (Beckmann-Goosse-style, default config: ocean.pik_melt_factor = 5e-3, hard-coded c_p_ocean = 3974 J/(K kg), gamma_T = 1e-4 m/s, salinity = 35 g/kg, T_ocean = -1.7 deg C)",
+      "ocean_constant_cross_check": "ocean::Constant (default ocean.constant.melt_rate = 0.05191419359084029 m/yr)",
+      "surface": "surface::PIK constructed with the PIK atmosphere (the model ignores the atmosphere pointer; SMB is prescribed by the driver as atmosphere.precipitation minus a deterministic Gaussian ablation blob centered on the warm-north floating shelf (x=0, y=+450 km, peak 300 kg m^-2 yr^-1, sigma 250 km), so a 32-cell band of the north shelf has melt > 0 while the rest is accumulation)"
+    },
+    "time": "t = 0, dt = 1 year (all update_impl ignore t and dt); the temperature time series is sampled with ts = {0..1 year}/12 using the component's init_timeseries/temp_time_series",
+    "config_keys_that_matter": {
+      "atmosphere.pik.parameterization": "martin (default; T_ma formula 303.15 + 0.68775 lat - 0.0075 usurf)",
+      "atmosphere.pik.file": "empty (default) -- the driver prescribes the precipitation field",
+      "atmosphere.fausto_air_temp.summer_peak_day": "196 (default; the cosine-cycle peak; irrelevant for martin where the cycle amplitude is 0)",
+      "ocean.pik_melt_factor": 0.005,
+      "ocean.constant.melt_rate": "0.05191419359084029 m/yr (default)",
+      "constants.ice.density": 910.0,
+      "constants.sea_water.density": 1028.0,
+      "constants.standard_gravity": 9.81,
+      "constants.fresh_water.melting_point_temperature": 273.15,
+      "constants.ice.beta_Clausius_Clapeyron": "7.9e-8 K/Pa",
+      "constants.fresh_water.latent_heat_of_fusion": "3.34e5 J/kg",
+      "hard-coded_in_ConstantPIK.cc": "c_p_ocean = 3974 J/(K kg), gamma_T = 1e-4 m/s, ocean salinity = 35 g/kg, T_ocean = -1.7 deg C"
+    }
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, component, geometry description, grid, command line",
+    "parameters.csv": "atmosphere.*, ocean.*, surface.*, constants.*, grid.* config keys",
+    "inputs.nc": "geometry (lat, lon, topg, sea_level, thk, usurf, mask, cell_grounded_fraction), atmosphere (precipitation, air_temp_mean_annual, air_temp_mean_summer), PIK ocean (shelfbtemp, shelfbmassflux, average_water_column_pressure), Constant ocean cross-check (shelfbtemp_constant, shelfbmassflux_constant, average_water_column_pressure_constant), surface (climatic_mass_balance, ice_surface_temp, surface_accumulation_flux, surface_melt_flux, surface_runoff_flux)",
+    "columns.csv": "per cell: geometry, atmosphere outputs, PIK + Constant ocean outputs, surface outputs, and the analytic references (T_ma, T_shelf, mass flux, water column pressure)",
+    "atmosphere_temperature.csv": "(latitude, surface_elevation) -> T_ma = T_ms (martin) -- the atmosphere temperature kernel",
+    "atmosphere_precipitation.csv": "r -> P(r) = (200 + 100 cos(pi r/Lx)) kg m^-2 yr^-1 (time-independent)",
+    "atmosphere_temperature_timeseries.csv": "T(t) over one year at the near-dome / north / south sample points via the component's temp_time_series (flat for martin, T_ms = T_ma)",
+    "shelf_base_temperature.csv": "(H, pressure = rho_i g H) -> T_shelf = T0 - beta_CC rho_i g H (linear pressure melting point)",
+    "beckmann_goosse_mass_flux.csv": "(H, z_b, T_f, T_ocean, ocean_heat_flux) -> mass_flux = Q/L (positive = melting)",
+    "water_column_pressure.csv": "(H, bed, z_s=0) -> ice_bottom, h_w, P = 0.5 rho_w g h_w^2 / H (depth-averaged over the ice column)",
+    "surface_partition.csv": "smb -> accumulation = max(smb,0), melt = runoff = max(-smb,0), mass_flux identity"
+  },
+  "checks": {
+    "air_temp_analytic": "max |air_temperature - T_ma(usurf, lat)| over the map = 0 K; T_ma(-80, 0) = 248.13 K, T_ma(-60, 0) = 261.885 K, T_ma(-70, 1500) = 243.7575 K; dome cell (15,15): lat = -70, usurf = 1490.51 m, air_temp = 243.829 K; domain range [243.829, 261.663] K",
+    "precip_field": "precipitation() = the prescribed field exactly (P(r) = 100*(2 + cos(pi r/Lx)) kg m^-2 yr^-1 converted to kg m^-2 s^-1); time-independent (precip_time_series constant)",
+    "yearly_cycle_flat": "for the martin parameterization T_ms = T_ma so the temperature time series is constant (zero-amplitude cosine); the general YearlyCycle formula is T(t) = T_ma + (T_ms - T_ma) cos(2 pi (year_fraction - summerday_fraction))",
+    "shelfbtemp_analytic": "shelf_base_temperature = T0 - beta_CC rho_i g H exactly (max err 0 K); T_shelf(0) = 273.15 K = T0, T_shelf(2000) = 271.739518 K, T_shelf(3000) = 271.034277 K. NOTE: this is the linear pressure melting point, DEcreasing with depth (thicker ice -> colder shelf base); the naive 'deep cavity -> T_max' expectation is wrong for this model",
+    "shelfbmassflux_analytic": "shelf_base_mass_flux = Q/L exactly (max err 1.69407e-21 kg m^-2 s^-1, round-off); mf(0) = 1.229863e-06, mf(2000) = 9.501970e-06 kg m^-2 s^-1 = 0.329509 m/yr ice-equivalent, mf(3000) = 1.363802e-05; domain range [1.22986e-06, 1.3638e-05], always positive",
+    "shelfbmassflux_sign": "positive = melting: the code path is combine_basal_melt_rate -> dH_BMB = -dt*mf/rho_i in the geometry update. The PIK flux is positive everywhere under the shelf (T_ocean = -1.7 C > T_f for all z_b <= 0). The ConstantPIK.cc comment claiming it is 'always negative' and 'positive if ice is freezing on' is WRONG on both counts (documentation bug, see bugs.md)",
+    "water_column_pressure_analytic": "average_water_column_pressure = 0.5 rho_w g h_w^2 / H (NOT rho_w g depth), h_w = max(z_s - max(bed, z_s - (rho_i/rho_w) H), 0), 0 for H = 0; max err over the map = 0 Pa; P(2000 m ice, bed -3000) = 7.902394e6 Pa; P(2500 m ice, bed -1509.5, grounded) = 4.59577e6 Pa; domain range [0, 9.97946e6] Pa (max at the deep-trough floating cell (19,12): H = 2525.68 m, bed = -2292.98 m)",
+    "constant_ocean_crosscheck": "Constant ocean: shelf_base_temperature identical to the PIK pressure melting point (max err 0 K); shelf_base_mass_flux = melt_rate * rho_i = 1.497038e-06 kg m^-2 s^-1 everywhere (0.051914 m/yr ice-equivalent, max err 0); average_water_column_pressure identical to the PIK ocean (max err 0 Pa)",
+    "surface_smb_identity": "mass_flux = accumulation - runoff exactly over the map (max err 0 kg m^-2 s^-1); accumulation = max(smb, 0), melt = runoff = max(-smb, 0) (dummy_* partition)",
+    "surface_temperature_identity": "surface temperature = atmosphere air_temperature field-for-field (both use the same Martin 2011 formula on the same usurf/lat): max err 0 K",
+    "surface_melt_region": "32 cells with melt > 0, all floating-shelf cells on the warm-north side of the trough (the ablation blob); dome cell (15,15): smb = 9.134e-06 kg m^-2 s^-1 = accumulation, melt = runoff = 0",
+    "determinism": "dumps byte-for-byte identical across reruns"
+  }
+}

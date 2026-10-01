@@ -219,21 +219,101 @@ updated: 2026-10-01.
   (`|dx-dy|/min(dx,dy) > 1e-2`). The calving dumps use a square 65x65 grid with
   the same uniform-in-y shelf state.
 
+## Milestone 3 (continued) — atmosphere / ocean / surface forcing boundaries instrumented ✅
+
+- **Surface/ocean forcing traces** ✅ — new `instrument_surface_ocean.cc`: the
+  three forcing-boundary model families (PIK atmosphere, PIK / Beckmann–Goosse
+  ocean + Constant cross-check, PIK surface) on one shared 31×31 grid. The
+  geometry is the test-F exact radial dome (extent 750 km) on a Gaussian ocean
+  trough/cavity bed `bed(r) = -1500 - 1500 exp(-((r-450km)/200km)^2)` m
+  (r = 450 km → −3000 m trough under the mid-shelf) with sea level 0 and a
+  latitude gradient `-70 + 10 y/Ly` deg (spanning −80..−60, so the south edge
+  is cold and the north edge warm): 69 grounded / 448 floating / 444
+  ice-free-ocean cells. Models constructed directly (not via the factory); the
+  PIK atmosphere and surface are subclassed in-driver to prescribe the
+  precipitation / SMB fields instead of reading files.
+  - **Atmosphere** (atmosphere::PIK, default `martin` parameterization):
+    `air_temperature() = T_ma = 303.15 + 0.68775·lat - 0.0075·usurf`
+    (note the source's `-0.68775*lat*(-1.0)` = `+0.68775·lat`), verified to the
+    analytic formula with max err 0 K over the map (`T_ma(-80,0) = 248.13 K`,
+    `T_ma(-60,0) = 261.885 K`; dome cell (15,15): lat −70, usurf 1490.51 m →
+    243.829 K). `T_ms = T_ma` for martin, so the yearly-cycle time series is a
+    flat zero-amplitude cosine (verified through the component's own
+    `temp_time_series`). Precipitation is driver-prescribed
+    `P(r) = (200 + 100 cos(pi r/Lx)) kg m^-2 yr^-1` (the real model reads it
+    from a file; `atmosphere.pik.file` left empty).
+  - **PIK ocean** (ocean::PIK, Beckmann–Goosse-style): `shelf_base_temperature`
+    is the **linear** pressure melting point `T0 - beta_CC rho_i g H` — it
+    *decreases* with depth (`T_shelf(0) = 273.15 K`, `T_shelf(2000) =
+    271.7395 K`), not the naive "deep cavity → T_max" (task guess corrected;
+    max err 0 K). `shelf_base_mass_flux` is `Q/L` with
+    `Q = melt_factor rho_w c_p gamma_T (T_ocean - T_f)`, `T_f = 273.15 + 0.0939
+    - 0.057 S + 7.64e-4 z_b`, `z_b = -(rho_i/rho_w) H`; **positive = melting**
+    (the geometry update path is `combine_basal_melt_rate` → `dH_BMB =
+    -dt·mf/rho_i`). With the default `T_ocean = -1.7 °C` the flux is positive
+    everywhere: `mf(0) = 1.229863e-06`, `mf(2000) = 9.501970e-06` kg m^-2 s^-1
+    (= 0.3295 m/yr), range [1.23e-06, 1.36e-05]; max err vs analytic
+    1.7e-21 kg m^-2 s^-1 (round-off). `average_water_column_pressure` is the
+    **depth-averaged** form `0.5 rho_w g h_w^2/H` (NOT `rho_w g depth`), max err
+    0 Pa (`P(2000 m ice, bed −3000) = 7.902394e6 Pa`; range [0, 9.979e6] Pa).
+  - **Constant ocean cross-check** (ocean::Constant): `shelf_base_temperature`
+    identical to the PIK pressure melting point (max err 0 K);
+    `shelf_base_mass_flux = melt_rate·rho_i = 1.497038e-06` kg m^-2 s^-1
+    everywhere (the default `0.051914 m/yr`); water column pressure identical
+    to PIK (max err 0 Pa).
+  - **Surface** (surface::PIK, wired by the driver): the SMB is the atmosphere
+    precipitation minus a deterministic Gaussian ablation blob centered on the
+    warm-north floating shelf (x=0, y=+450 km, peak 300 kg m^-2 yr^-1, sigma
+    250 km), so a 32-cell band of the north shelf has melt > 0 while the rest
+    accumulates. The `dummy_*` partition is `accumulation = max(smb,0)`,
+    `melt = runoff = max(-smb,0)`, so `mass_flux = accumulation - runoff`
+    exactly (max err 0). The surface temperature uses the same martin formula
+    as the atmosphere, so `surface temperature == atmosphere air_temperature`
+    field-for-field (max err 0 K).
+- **Dumps** ✅ — `stage1/dumps/surface_ocean/` (11 files): `meta.txt`,
+  `parameters.csv`, `inputs.nc` (geometry + all atmosphere/ocean/surface maps),
+  `columns.csv` (per-cell trace with analytic references),
+  `atmosphere_temperature.csv`, `atmosphere_precipitation.csv`,
+  `atmosphere_temperature_timeseries.csv`, `shelf_base_temperature.csv`,
+  `beckmann_goosse_mass_flux.csv`, `water_column_pressure.csv`,
+  `surface_partition.csv`.
+- **Run config** ✅ — `stage1/runs/surface_ocean.json` (grid, geometry, model
+  construction, config keys that matter, check values). Key config:
+  `atmosphere.pik.parameterization = "martin"` (default),
+  `atmosphere.pik.file = ""` (driver prescribes precipitation),
+  `ocean.pik_melt_factor = 5e-3`, `ocean.constant.melt_rate = 0.0519 m/yr`
+  (default); the ocean-side hard-coded constants are in `ConstantPIK.cc`:
+  `c_p_ocean = 3974`, `gamma_T = 1e-4`, `salinity = 35`, `T_ocean = -1.7 °C`.
+- **New C++ documentation bug found** — the comment in `ConstantPIK.cc` claims
+  the shelf base mass flux is "always negative" and "positive if ice is
+  freezing on"; the actual sign convention is **positive = melting** (bugs.md
+  #5).
+- Deferred (documented in boundaries.md §10): `atmosphere::Given`/
+  `atmosphere::FifoSIA`/`atmosphere::Forcing`, `ocean::Given`, the
+  `surface::Given` and `surface::Delta_T` SMB models, and the coupler-level
+  `SurfaceForcing` time interpolation.
+- Deterministic: dumps byte-for-byte identical across reruns.
+
 ## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`
 - [x] Step 2: instrument boundaries to dump inputs/outputs — **rheology + SIA +
       SSA + energy + age + basal strength + hydrology (Routing) + bed
-      (PointwiseIsostasy) done**; remaining: Distributed/SteadyState hydrology,
-      LingleClark/Given bed models, surface/ocean/calving, geometry
+      (PointwiseIsostasy) + calving/frontal melt + surface/ocean (PIK
+      atmosphere, PIK/Beckmann–Goosse ocean + Constant cross-check, PIK
+      surface) done**; remaining: Distributed/SteadyState hydrology,
+      LingleClark/Given bed models, geometry (ice geometry update)
 - [x] Step 3 (partial): dump subassembly I/O — SSA `nuH`/`taud` (FD
       subassemblies), SIA `delta`/`D`/`q` chains, the
       `MohrCoulombPointwise`/basal-resistance-law pointwise functions, the
-      Routing staggered `Wstag/Kstag/Vstag/Qstag` substep fields, and the bed
-      `compute_load`/update-law pointwise functions are dumped; deeper
+      Routing staggered `Wstag/Kstag/Vstag/Qstag` substep fields, the bed
+      `compute_load`/update-law pointwise functions, and the
+      atmosphere/ocean/surface pointwise kernels
+      (`(lat,usurf)->T_ma`, `H->T_shelf`, `(H,z_b,T_f,T_ocean)->mf`,
+      `(H,bed)->P_awcp`, `smb->(accumulation,melt,runoff)`) are dumped; deeper
       subassemblies (e.g. the assembled KSP matrix) are deferred
 - [x] Step 4: record run configurations → `stage1/runs/README.md` +
-      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed}.json`;
+      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving,surface_ocean}.json`;
       dumps stored in `stage1/dumps/`
 - [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
@@ -257,6 +337,8 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
 - Known issue: full-model `-test V` fails (bugs.md #3); use `pism_ssa_test_*`
 - Known issue: `StressBalance::Inputs::dump()` broken (bugs.md #4); drivers
   write NetCDF directly
+- Known issue: `ConstantPIK.cc` shelf-base mass flux sign comment wrong
+  (bugs.md #5; the flux is positive = melting)
 
 ## Dumps
 
@@ -278,6 +360,12 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
 - `stage1/dumps/bed/` — 6 files, ~0.8 MB (regenerate:
   `instrument/instrument_bed -Mx 31 -My 31 -dumps_dir
   stage1/dumps/bed`)
+- `stage1/dumps/calving/` — 13 files, ~4.8 MB (regenerate:
+  `instrument/instrument_calving -Mx 65 -My 65 -dumps_dir
+  stage1/dumps/calving`)
+- `stage1/dumps/surface_ocean/` — 11 files, ~0.8 MB (regenerate:
+  `instrument/instrument_surface_ocean -Mx 31 -My 31 -dumps_dir
+  stage1/dumps/surface_ocean`)
 - Full dumps are gitignored (`stage1/dumps/*`); `stage1/dumps/README.md`
   documents the layout and regeneration. Numeric test tuples extracted from
   these go into Stage-2 `.esm` `tests` blocks.
