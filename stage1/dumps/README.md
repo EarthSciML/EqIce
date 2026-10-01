@@ -16,16 +16,18 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 |---|---|---|---|---|
 | `rheology/` | Flow laws, enthalpy converter, effective viscosity | `instrument/instrument_rheology.cc` | `runs/rheology.json` | `instrument/instrument_rheology` |
 | `sia/` | SIA stress balance (test-F exact state) | `instrument/instrument_sia.cc` | `runs/sia.json` | `instrument/instrument_sia -Mx 31 -My 31 -Mz 61` |
+| `ssa/` | SSA stress balance (test V / van der Veen shelf) | `instrument/instrument_ssa.cc` | `runs/ssa.json` | `instrument/instrument_ssa -Mx 61 -My 3` |
 
-Both drivers accept `-dumps_dir <path>` to redirect the output.
+All drivers accept `-dumps_dir <path>` to redirect the output.
 
 ## Regenerating
 
 ```bash
 source stage1/runs/env.sh
-bash stage1/build/build_instrument.sh          # builds both drivers
+bash stage1/build/build_instrument.sh          # builds all drivers
 stage1/instrument/instrument_rheology -dumps_dir stage1/dumps/rheology
 stage1/instrument/instrument_sia -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps/sia
+stage1/instrument/instrument_ssa -Mx 61 -My 3 -dumps_dir stage1/dumps/ssa
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -45,10 +47,14 @@ component must reproduce.
   `(alpha, pressure, E, stress, flow, delta)` chain that produces the
   diffusivity `D` (verified: the trapezoidal integral of `delta` equals `D` to
   full precision). `sia/inputs.nc` is the complete input+output NetCDF.
-- The test-F state means every dumped quantity has an exact reference value
-  (see `sia/exact_solution.csv`); the discrete-vs-exact differences (surface
-  velocity ~0.2 m/yr at 31x31) are the expected discretization error of the
-  C++ model, which the `.esm` reimplementation must reproduce.
+- **SSA** (`ssa/columns.csv`): per cell `(geometry, tauc, u, v, F_b, taud_x/y,
+  nuH, Bbar)` plus the exact van der Veen reference `(H, u, v)`. The solve
+  matches the exact solution to 0.077% average error at Mx=61 (Bbar = 1.9e8
+  exactly, constant-flux relation u*H = V0*H0 verified). `ssa/inputs.nc` has
+  all inputs + outputs including the FD subassemblies `nuH` and `taud`.
+- The test-F/V states mean every dumped quantity has an exact reference value;
+  the discrete-vs-exact differences are the expected discretization error of
+  the C++ model, which the `.esm` reimplementation must reproduce.
 
 ## Known C++ issue hit while dumping
 

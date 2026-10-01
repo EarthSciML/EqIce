@@ -1,0 +1,51 @@
+{
+  "component": "ssa",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "instantaneous_derivative",
+  "description": "SSA stress-balance boundary traces using the verification test V 'circular flat-bottomed continent' (CFBC) configuration: the van der Veen flow-line floating shelf with the calving-front stress boundary condition. One SSA solve; the exact solution H(x), u(x) = V0*H0/H(x), v = 0 is known at every cell.",
+  "regenerate": {
+    "command": "cd stage1 && source runs/env.sh && instrument/instrument_ssa -Mx 61 -My 3 -dumps_dir stage1/dumps/ssa",
+    "note": "Override grid with -Mx/-My and output with -dumps_dir. The PISM CI canonical grid is -Mx 201 -My 3."
+  },
+  "domain": {
+    "Lx_m": 250000,
+    "Ly_m": 250000,
+    "registration": "CELL_CENTER",
+    "periodicity": "Y_PERIODIC",
+    "Mx": 61,
+    "My": 3,
+    "dx_m": 8196.7
+  },
+  "setup": {
+    "flow_law": "isothermal_glen with B = 1.9e8 Pa s^(1/n) (set via flow_law.isothermal_Glen.ice_softness = B^-n)",
+    "glen_exponent_n": 3,
+    "sliding": "none (floating shelf, tauc = 0)",
+    "bed": "-1000 m everywhere (shelf is floating)",
+    "van_der_Veen": {
+      "V0_m_per_year": 300,
+      "H0_m": 600,
+      "C_Pa-3_s-1": 2.45e-18,
+      "note": "C is the 'typical constant ice parameter'; corresponds to the isothermal Glen B = 1.9e8"
+    },
+    "config_overrides": {
+      "stress_balance.ssa.compute_surface_gradient_inward": false,
+      "stress_balance.calving_front_stress_bc": true,
+      "stress_balance.ssa.fd.flow_line_mode": true,
+      "stress_balance.ssa.fd.extrapolate_at_margins": false,
+      "stress_balance.ssa.flow_law": "isothermal_glen"
+    }
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, grid, command line",
+    "parameters.csv": "stress_balance.ssa.*, flow_law.*, constants.*, grid.*, basal_resistance.* config keys",
+    "inputs.nc": "all inputs + outputs (usurf, thk, topg, mask, tauc, bc_mask, bc_values, enthalpy, velocity, F_b, driving stress, nuH, ice hardness)",
+    "columns.csv": "per cell: geometry, tauc, computed u/v/F_b/taud_x/taud_y/nuH/Bbar, exact H/u/v"
+  },
+  "checks": {
+    "Bbar": "ice hardness = 1.9e8 Pa s^(1/n) everywhere (isothermal Glen)",
+    "exact_solution": "computed u matches the van der Veen exact solution: average error 0.077% at Mx=61 (max vector err 1.32 m/yr near the calving front)",
+    "constant_flux": "u*H = V0*H0 along the shelf (verified)",
+    "F_b": "0 everywhere (floating shelf, no basal drag)",
+    "taud": "driving stress decreases downstream with thickness"
+  }
+}
