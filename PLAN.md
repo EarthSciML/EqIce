@@ -66,8 +66,13 @@ top-level `eqice.esm` (stage 3) composes the merged components.
 
 Purpose: produce authoritative input/output traces to build tests from.
 
+**Status (2026-09-30):** milestone 1 complete — PISM v2.3.2 + PETSc v3.26.0
+built (`stage1/build/`), reference run configs recorded (`stage1/runs/README.md`),
+subassembly boundaries cataloged (`stage1/boundaries.md`). Instrumentation of
+the rheology boundary is in progress (`stage1/instrument/`). See `PROGRESS.md`.
+
 1. Identify discrete subassembly boundaries in the C++ codes matching the
-   component inventory above.
+   component inventory above. → **`stage1/boundaries.md`** (done).
 2. Instrument each boundary to dump inputs and outputs during simulation.
    Prefer **instantaneous derivatives**; use integrated trajectories only where
    derivatives are unavailable.
@@ -149,8 +154,9 @@ whether the `.esm` reproduces or corrects it, and status.
 
 ## 10. Milestones / sequencing
 
-1. Confirm PISM source access + build; pick reference run configs.
-2. Stage-1 instrumentation scaffolding + first component traces (rheology, SIA).
+1. Confirm PISM source access + build; pick reference run configs. ✅
+2. Stage-1 instrumentation scaffolding + first component traces (rheology, SIA)
+   — in progress (rheology driver started).
 3. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
    bed → surface/ocean/calving → subassemblies.
 4. Stage-3: `eqice.esm` coupling + full-model validation.

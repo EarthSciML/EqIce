@@ -1,0 +1,36 @@
+# Untracked build artifacts and tooling (see PLAN.md §7)
+
+# PISM C++ source checkout (reference implementation)
+stage1/pism/
+
+# PETSc source + in-place build (arch-*)
+stage1/petsc/
+
+# expat source + install (UDUNITS-2 dependency)
+stage1/expat/
+
+# expat source tarball (untracked download)
+stage1/expat.tar.gz
+
+# UDUNITS-2 source + install
+stage1/udunits/
+
+# PISM CMake build directory
+stage1/pism-build/
+
+# PISM install prefix
+stage1/pism-install/
+
+# build logs and scratch
+stage1/build/
+
+# temporary dump scratch files
+stage1/dumps/**/*.tmp
+
+# run outputs (write to /scratch.local instead)
+stage1/runs/*.nc
+stage1/runs/*.log
+
+# EarthSciAST Rust CLI binary (kept untracked per AGENTS.md)
+/earthscirust
+/esm
