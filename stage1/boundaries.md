@@ -238,10 +238,16 @@ downstream in `MohrCoulombYieldStress`, not here.
 Base `BedDef`: `update(ice_thickness, sea_level_elevation, t, dt)` →
 `bed_elevation()`, `uplift()`. Load accumulator integrates ice-equivalent
 thickness over `dt`; `update_impl(load, t, dt)` called at
-`bed_deformation.update_interval`. **I**. Models: `Null`, `PointwiseIsostasy`
-(local relaxing half-space), `Given` (file), `LingleClark` (wrapper) /
-`LingleClarkSerial` (Fourier spectral collocation, viscous half-space + elastic
-lithosphere; `step(dt, H)` → total/viscous/elastic displacement).
+`bed_deformation.update_interval`. **I**. Models: `Null`,
+`PointwiseIsostasy` (`"iso"` — *instantaneous* local isostasy,
+`topg_out = topg_last − f·(load − load_last)`, `f = ρ_ice/ρ_mantle`,
+`load_last ← load`; **no relaxation time** — the exponential viscous
+relaxation belongs to Lingle-Clark, not here), `Given` (file),
+`LingleClark` (wrapper) / `LingleClarkSerial` (Fourier spectral collocation,
+viscous half-space + elastic lithosphere; `step(dt, H)` →
+total/viscous/elastic displacement). The `load` seen by `update_impl` is the
+time-averaged load over the update interval (the accumulator divides by
+`dt_beddef` at the update time; see `stage1/dumps/bed/`).
 
 ## 9. Front retreat / calving — `frontretreat/` → `calving.esm`
 

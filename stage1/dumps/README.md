@@ -21,6 +21,7 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 | `age/` | Ice age (AgeModel, one dt step, test-F velocity) | `instrument/instrument_energy.cc` | `runs/energy_age.json` | (same driver; see `energy/`) |
 | `basal_strength/` | Basal yield stress (Mohr-Coulomb) + basal resistance laws | `instrument/instrument_basal_strength.cc` | `runs/basal_strength.json` | `instrument/instrument_basal_strength -Mx 31 -My 31` |
 | `hydrology/` | Subglacial hydrology (Routing/Shreve, one dt step, test-F geometry) | `instrument/instrument_hydrology.cc` | `runs/hydrology.json` | `instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25` |
+| `bed/` | Bed deformation (PointwiseIsostasy, two update intervals, test-F load history) | `instrument/instrument_bed.cc` | `runs/bed.json` | `instrument/instrument_bed -Mx 31 -My 31` |
 
 The energy and age traces come from the same driver (they share the test-F
 state). All drivers accept `-dumps_dir <path>` to redirect the output; the
@@ -37,6 +38,7 @@ stage1/instrument/instrument_ssa -Mx 61 -My 3 -dumps_dir stage1/dumps/ssa
 stage1/instrument/instrument_energy -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps -dt_years 10
 stage1/instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir stage1/dumps/basal_strength
 stage1/instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir stage1/dumps/hydrology
+stage1/instrument/instrument_bed -Mx 31 -My 31 -dumps_dir stage1/dumps/bed
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -120,6 +122,37 @@ component must reproduce.
     (radially symmetric forcing). Note the dumped flux is the *advective* flux
     `V W_upwind`; the diffusive term `rho_w g K W grad W` is applied separately
     inside the `W` update and is not part of `flux()`.
+- **Bed deformation** (`bed/`): two full update intervals of
+  `bed::PointwiseIsostasy` (`bed_deformation.model = "iso"`) on the test-F
+  exact geometry, with a deterministic load history (uniform 300 m
+  thickening over interval 1, constant in interval 2; 5 `update()` calls of
+  dt = 20 "365day yr" per 100-yr365 interval). **Important:** `PointwiseIsostasy`
+  is the *instantaneous* local isostasy law `topg_out = topg_last -
+  f*(load - load_last)`, `f = rho_ice/rho_mantle`, with `load_last <- load`
+  and **no relaxation time** — the exponential viscous half-space relaxation
+  belongs to the Lingle-Clark model (`bed_deformation.model = "lc"`), which is
+  a deferred subassembly (not instrumented). The `load` seen by `update_impl`
+  is the *time-averaged* load over the update interval (the base class
+  accumulates `load*dt` on every `update()` call and only triggers the model
+  when `t_final` hits `m_t_last + update_interval`).
+  - `bed/columns.csv`: per cell the full I-boundary trace — `(H0, H1,
+    load_avg_1, load_avg_2, bed_in_1, bed_out_1, uplift_1, bed_in_2,
+    bed_out_2, uplift_2, bed_analytic_1, bed_analytic_2)`. The dome cell
+    (15,15) shows `bed_out_1 = -41.363636 m`, `bed_out_2 = -82.727273 m`
+    (exactly `-f*150` and `-f*300`); ice-free far-field cells stay at 0.
+  - `bed/pointwise.csv`: the two pointwise laws as pure `.esm` test targets —
+    `compute_load(bed, H, sea_level)` (the ice-equivalent load, 0 where the
+    ocean load exceeds the ice load, i.e. floating ice excluded) and the
+    update law `topg_out = bed_in - f*(load - load_last)` with
+    `f = rho_ice/rho_mantle`.
+  - `bed/inputs.nc` has all inputs + state in/out for both intervals;
+    `bed/load_history.csv` records the exact `(call, t, dt, dH)` load
+    sequence.
+  - Validation (see `runs/bed.json`): the pointwise contract holds to 0 m
+    (machine precision), `uplift = (bed_out - bed_in)/dt_beddef` exactly
+    (max err 1.65e-24 m/s), and the load accumulator reproduces the
+    time-average of the call loads exactly (the load is `H0 + dH/2` over
+    interval 1 and `H0 + dH` over interval 2).
 - The test-F/V states mean every dumped quantity has an exact reference value
   (or a clean null state, as with age = 0); the discrete-vs-exact differences
   are the expected discretization error of the C++ model, which the `.esm`

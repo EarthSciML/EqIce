@@ -114,20 +114,62 @@ updated: 2026-10-01.
   models are **not** instrumented yet (deferred to a later pass; noted in
   `stage1/boundaries.md` §7 and the hydrology README section).
 
+## Milestone 3 (continued) — bed deformation boundary instrumented ✅
+
+- **Bed deformation traces** ✅ — new `instrument_bed.cc`: two full update
+  intervals of `bed::PointwiseIsostasy` (PISM config `bed_deformation.model =
+  "iso"`) on the test-F exact geometry (flat bed, Mx=My=31). Deterministic
+  load history: interval 1 (t = 0..100 "365day yr", 5 calls of dt = 20 yr365)
+  grows the ice load uniformly from H0(r) to H0(r)+300 m in 5 equal steps, so
+  the time-averaged load is exactly H0 + 150 m; interval 2 (t = 100..200
+  yr365) holds the load constant at H0 + 300 m.
+  - **Key finding:** `PointwiseIsostasy` is the *instantaneous* local isostasy
+    law `topg_out = topg_last - f*(load - load_last)`,
+    `f = rho_ice/rho_mantle = 910/3300 = 0.275758`, with `load_last <- load`
+    and **no relaxation time** — a load change is fully compensated in the
+    single update that follows it. The exponential viscous half-space
+    relaxation belongs to the Lingle-Clark model (`bed_deformation.model =
+    "lc"`), which is **not** instrumented (deferred subassembly; the
+    boundaries.md §8 catalog and the dumps README note this).
+  - The load fed to `update_impl` is the *time-averaged* load over the update
+    interval: `BedDef::update()` accumulates `load*dt` on every call and only
+    triggers the derived model when `t_final` hits `m_t_last +
+    update_interval` (within `time_stepping.resolution`); it then uses
+    `load = accumulator/dt_beddef`, resets the accumulator, and sets
+    `uplift = (topg - topg_last)/dt_beddef`, `topg_last = topg`.
+  - Validation: `bed_out_1 = -f*150 = -41.3636 m` and
+    `bed_out_2 = -f*300 = -82.7273 m` exactly (max |bed - analytic| = 0 m over
+    the 517 ice cells); 444 ice-free far-field cells stay at 0; the uplift
+    identity `uplift = (bed_out-bed_in)/dt_beddef` holds to 1.65e-24 m/s;
+    `uplift = -1.3116e-8 m/s = -0.4136 m/365day-yr` per interval; the load
+    accumulator reproduces the time average of the call loads exactly
+    (H0 + 150 m / H0 + 300 m).
+  - Dumps in `stage1/dumps/bed/`: `meta.txt`, `parameters.csv`, `inputs.nc`
+    (loads, bed in/out, uplift, analytic references for both intervals),
+    `columns.csv` (per-cell I-boundary trace), `pointwise.csv` (the
+    `compute_load` and update-law pointwise functions — analytic .esm test
+    targets), `load_history.csv` (the exact (call, t, dt, dH) sequence).
+- **Run config** ✅ — `stage1/runs/bed.json` (grid, dt, load history, checks).
+- The `Null` (`bed_deformation.model = "none"`) cross-check is trivially
+  verified from source (empty `update_impl`: bed unchanged, uplift 0), not
+  dumped. The `Given` and `LingleClark`/`LingleClarkSerial` models are not
+  instrumented (deferred; noted in `stage1/boundaries.md` §8).
+
 ## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`
 - [x] Step 2: instrument boundaries to dump inputs/outputs — **rheology + SIA +
-      SSA + energy + age + basal strength + hydrology (Routing) done**;
-      remaining: Distributed/SteadyState hydrology, bed, surface/ocean/calving,
-      geometry
+      SSA + energy + age + basal strength + hydrology (Routing) + bed
+      (PointwiseIsostasy) done**; remaining: Distributed/SteadyState hydrology,
+      LingleClark/Given bed models, surface/ocean/calving, geometry
 - [x] Step 3 (partial): dump subassembly I/O — SSA `nuH`/`taud` (FD
       subassemblies), SIA `delta`/`D`/`q` chains, the
-      `MohrCoulombPointwise`/basal-resistance-law pointwise functions, and the
-      Routing staggered `Wstag/Kstag/Vstag/Qstag` substep fields are dumped;
-      deeper subassemblies (e.g. the assembled KSP matrix) are deferred
+      `MohrCoulombPointwise`/basal-resistance-law pointwise functions, the
+      Routing staggered `Wstag/Kstag/Vstag/Qstag` substep fields, and the bed
+      `compute_load`/update-law pointwise functions are dumped; deeper
+      subassemblies (e.g. the assembled KSP matrix) are deferred
 - [x] Step 4: record run configurations → `stage1/runs/README.md` +
-      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology}.json`;
+      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed}.json`;
       dumps stored in `stage1/dumps/`
 - [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
@@ -169,6 +211,9 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
 - `stage1/dumps/hydrology/` — 6 files, ~1.2 MB (regenerate:
   `instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir
   stage1/dumps/hydrology`)
+- `stage1/dumps/bed/` — 6 files, ~0.8 MB (regenerate:
+  `instrument/instrument_bed -Mx 31 -My 31 -dumps_dir
+  stage1/dumps/bed`)
 - Full dumps are gitignored (`stage1/dumps/*`); `stage1/dumps/README.md`
   documents the layout and regeneration. Numeric test tuples extracted from
   these go into Stage-2 `.esm` `tests` blocks.

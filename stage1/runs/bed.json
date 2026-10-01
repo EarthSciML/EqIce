@@ -1,0 +1,75 @@
+{
+  "component": "bed deformation (PointwiseIsostasy, bed_def.model = 'iso')",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "integrated_trajectory",
+  "description": "Two full update intervals of bed::PointwiseIsostasy (PISM config bed_deformation.model = 'iso') on the verification test-F exact geometry (flat bed, thickness = exact FG H, Mx=My=31, Lx=Ly=900 km). PointwiseIsostasy is the INSTANTANEOUS local isostasy model, NOT an exponential-relaxing half-space: update_impl() applies topg = topg_last - f*(load - load_last) with f = rho_ice/rho_mantle = 910/3300 = 0.275758, and load_last <- load, fully compensating each load *change* in the single update that follows it (there is no relaxation time; the exponential viscous-relaxation behavior belongs to the Lingle-Clark model, bed_deformation.model = 'lc', which is a deferred subassembly). The load consumed by update_impl() is the TIME-AVERAGED load over the update interval: BedDef::update() accumulates load*dt into m_load_accumulator on every call and triggers update_impl() only when t_final reaches m_t_last + bed_deformation.update_interval, with load = accumulator/dt_beddef and dt_beddef = t_final - m_t_last. Deterministic load history (uniform thickening applied only where ice exists, r <= LforFG - 1): interval 1 (t = 0..100 '365day yr') grows the load in 5 equal steps from H0(r) to H0(r)+300 m (calls of dt = 20 '365day yr' at H0 + k*75 m, k = 0..4), so the time-averaged load is exactly H0 + 150 m; interval 2 (t = 100..200 '365day yr') holds the load constant at H0 + 300 m. Expected beds under the ice: bed_out_1 = -f*150 = -41.3636 m, bed_out_2 = -f*300 = -82.7273 m; ice-free far-field cells stay at 0. NOTE: the default bed_deformation.update_interval of 10 '365day yr' is overridden to 100 to spread the demonstration over 5 calls per interval.",
+  "regenerate": {
+    "command": "source stage1/runs/env.sh && stage1/instrument/instrument_bed -Mx 31 -My 31 -dumps_dir stage1/dumps/bed",
+    "note": "Run from the repo root. Override grid with -Mx/-My, output with -dumps_dir. The scenario (update_interval = 100 '365day yr', dH = 300 m, 5 calls/interval, 2 intervals) is hard-coded in the driver; edit the source to change it. Overwriting an existing inputs.nc makes the netCDF library leave an inputs.nc~ backup in the dumps directory (delete or ignore it)."
+  },
+  "domain": {
+    "Lx_m": 900000,
+    "Ly_m": 900000,
+    "registration": "CELL_CENTER",
+    "periodicity": "NOT_PERIODIC",
+    "Mx": 31,
+    "My": 31,
+    "dx_m": 58064.516129,
+    "cell_area_m2": 3371488033.3,
+    "note": "2-D grid only (no vertical levels needed for the basal boundary); exact test-F thickness, bed = 0, sea level = 0"
+  },
+  "time": {
+    "update_interval_365day_years": 100,
+    "update_interval_seconds": 3153600000,
+    "calls_per_interval": 5,
+    "dt_seconds_per_call": 630720000,
+    "dt_365day_years_per_call": 20,
+    "intervals": 2,
+    "total_calls": 10,
+    "note": "Times are in '365day years' (1 yr365 = 31536000 s) so that 5 calls of dt = 20 yr365 exactly tile the 100 yr365 update interval and the load accumulator is a clean time average (in 'year' units the 5 call times would not land on the '365day' update schedule)."
+  },
+  "setup": {
+    "default_config": "all bed_deformation.*, constants.*, grid.*, time_stepping.*, bootstrapping.* keys at their defaults except: bed_deformation.model = 'iso' (set explicitly) and bed_deformation.update_interval = 100 (was 10)",
+    "test_F": {
+      "L_m": 750000,
+      "H0_m": 3000,
+      "note": "dome-center exact H = 2999.9999752362 m (exactFG at r = 1 m); geometry.ice_free_thickness_standard at its default for the mask"
+    },
+    "config_keys_that_matter": {
+      "bed_deformation.model": "iso",
+      "bed_deformation.update_interval": "100 365days = 3.1536e9 s",
+      "bed_deformation.mantle_density": "3300 kg m^-3 (the only density that enters the iso response: f = rho_ice/rho_mantle)",
+      "constants.ice.density": 910.0,
+      "constants.sea_water.density": 1028.0,
+      "constants.standard_gravity": 9.81,
+      "time_stepping.resolution": "1 s (m_t_eps tolerance for hitting the update time)"
+    },
+    "load_history": {
+      "interval_1": "t = 0..100 yr365; 5 calls of dt = 20 yr365 at H = H0(r) + k*75 m, k = 0..4 (uniform thickening, applied only where H0 > 0); time-averaged load = H0 + 150 m exactly",
+      "interval_2": "t = 100..200 yr365; 5 calls of dt = 20 yr365 at H = H0(r) + 300 m (constant); time-averaged load = H0 + 300 m exactly",
+      "initial_state": "bed = 0 everywhere, load_last = H0 (the test-F load, computed by init_impl via accumulate_load at t = 0)",
+      "sea_level": "0 everywhere",
+      "dH": 300.0,
+      "note": "see load_history.csv for the exact (call, t, dt, dH) sequence"
+    },
+    "coupling_notes": "BedDef::update(ice_thickness, sea_level, t, dt) is the base-class contract; it accumulates load*dt on EVERY call and only calls the derived update_impl() when t_final lands on the update schedule (m_t_last + k*update_interval, within time_stepping.resolution). update_impl() sees the time-averaged load and the model's own bookkeeping sets uplift = (topg - topg_last)/dt_beddef and topg_last = topg afterward. If update() calls straddle an update time, the accumulator carries over until the boundary is hit (here each interval is exactly tiled by the 5 calls, so the average is exact)."
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, component, description, dt (per call + interval), grid, cell_area, rho_ice/rho_mantle/f, command line",
+    "parameters.csv": "bed_deformation.*, constants.*, grid.*, time_stepping.*, bootstrapping.* config keys (values + units)",
+    "inputs.nc": "topg (final bed == bed_out_2), final thickness H1, sea_level, H0, load_last_initial, load_avg_1/2 (the loads update_impl consumed), bed_in_1/out_1/in_2, uplift_1/2, bed_analytic_1/2",
+    "columns.csv": "per cell: i,j,x,y,r,H0,H1,load_avg_1,load_avg_2,bed_in_1,bed_out_1,uplift_1,bed_in_2,bed_out_2,uplift_2,bed_analytic_1,bed_analytic_2",
+    "pointwise.csv": "the two pointwise laws sampled over small grids (pure .esm test targets): compute_load(bed, H, sea_level) -> ice-equivalent load (ocean_load = (rho_w/rho_i)*max(sea_level-bed,0); returns 0 when the ocean load exceeds the ice load) and the update law topg_out = bed_in - f*(load - load_last), f = rho_ice/rho_mantle",
+    "load_history.csv": "the deterministic (call, interval, t_start_s, t_start_yr365, dt_s, dt_yr365, dH_m, t_end_s) sequence fed to BedDef::update()"
+  },
+  "checks": {
+    "pointwise_contract_1": "bed_out_1 = bed_in_1 - f*(load_avg_1 - H0) exactly: max |bed_out_1 - analytic_1| = 0 m over all 961 cells; analytic_1 = -41.363636 m under the 517 ice cells",
+    "pointwise_contract_2": "bed_out_2 = bed_out_1 - f*(load_avg_2 - load_avg_1) exactly: max |bed_out_2 - analytic_2| = 0 m; analytic_2 = -82.727273 m under the ice",
+    "far_field": "444 ice-free cells keep bed = 0 (load = 0 always): max |bed| there = 0 m",
+    "uplift_identity": "uplift = (bed_out - bed_in)/dt_beddef per cell to machine precision: max |uplift - (bed_out-bed_in)/dt_beddef| = 1.654e-24 m/s",
+    "uplift_values": "max |uplift_1| = max |uplift_2| = 1.31163e-8 m/s = 0.413636 m/365day-yr (the isostatic lowering rate for a 300 m/100-yr load ramp)",
+    "load_accumulator": "the load fed to update_impl is the time average of the call loads over the interval: max |independent recomputation - load_avg_1| = 0 m (exactly H0 + dH/2 = H0 + 150 m)",
+    "dome_cell": "cell (15,15): H0 = 2999.9999752362 m, load_avg_1 = 3149.9999752362 m (= H0 + 150), load_avg_2 = 3299.9999752362 m (= H0 + 300), bed_out_1 = -41.3636363636364 m, bed_out_2 = -82.7272727272727 m",
+    "cross_check_null": "bed_deformation.model = 'none' (Null) leaves the bed unchanged (empty update_impl; verified from source, not dumped)"
+  }
+}
