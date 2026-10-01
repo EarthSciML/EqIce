@@ -66,10 +66,12 @@ top-level `eqice.esm` (stage 3) composes the merged components.
 
 Purpose: produce authoritative input/output traces to build tests from.
 
-**Status (2026-09-30):** milestone 1 complete — PISM v2.3.2 + PETSc v3.26.0
-built (`stage1/build/`), reference run configs recorded (`stage1/runs/README.md`),
-subassembly boundaries cataloged (`stage1/boundaries.md`). Instrumentation of
-the rheology boundary is in progress (`stage1/instrument/`). See `PROGRESS.md`.
+**Status (2026-09-30):** milestone 1 complete (PISM v2.3.2 + PETSc v3.26.0
+built in `stage1/build/`; reference run configs in `stage1/runs/README.md`;
+boundary catalog in `stage1/boundaries.md`). Milestone 2 complete — rheology
+and SIA boundaries instrumented (drivers in `stage1/instrument/`, dumps in
+`stage1/dumps/`, run configs in `stage1/runs/{rheology,sia}.json`). Next:
+SSA boundary. See `PROGRESS.md`.
 
 1. Identify discrete subassembly boundaries in the C++ codes matching the
    component inventory above. → **`stage1/boundaries.md`** (done).
@@ -155,10 +157,12 @@ whether the `.esm` reproduces or corrects it, and status.
 ## 10. Milestones / sequencing
 
 1. Confirm PISM source access + build; pick reference run configs. ✅
-2. Stage-1 instrumentation scaffolding + first component traces (rheology, SIA)
-   — in progress (rheology driver started).
-3. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
+2. Stage-1 instrumentation scaffolding + first component traces (rheology, SIA). ✅
+3. Stage-1: instrument remaining boundaries — SSA (via `pism_ssa_test_*`), then
+   energy/age, basal/hydrology, bed, surface/ocean/calving, geometry.
+4. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
    bed → surface/ocean/calving → subassemblies.
+5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 
 Each milestone closes with merged PRs and passing inline tests.

@@ -1,0 +1,56 @@
+{
+  "component": "sia",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "instantaneous_derivative",
+  "description": "SIA stress-balance boundary traces using the verification test F exact solution (Bueler, Brown, Lingle, J. Glaciol. 53(182), 2007) as the input state. One full stress-balance update at t = 0 from the exact steady state; every dumped quantity has an exact reference value in exact_solution.csv.",
+  "regenerate": {
+    "command": "cd stage1 && source runs/env.sh && instrument/instrument_sia -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps/sia",
+    "note": "Canonical vertical resolution Mz=61 (matches the PISM manual test F config); horizontal 31x31 keeps file sizes moderate. Override with -Mx/-My/-Mz and -dumps_dir"
+  },
+  "domain": {
+    "Lx_m": 900000,
+    "Ly_m": 900000,
+    "Lz_m": 4000,
+    "vertical_spacing": "EQUAL",
+    "Mx": 31,
+    "My": 31,
+    "Mz": 61,
+    "dx_m": 58064.5
+  },
+  "setup": {
+    "flow_law": "arr (Paterson-Budd cold case)",
+    "glen_exponent_n": 3,
+    "sliding": "none (ZeroSliding)",
+    "bed": "flat (topg = 0 everywhere)",
+    "test_F": {
+      "L_m": 750000,
+      "Tmin_K": 223.15,
+      "ST_K_per_m": 1.67e-5,
+      "state": "exact solution at t = 0; enthalpy from exact T via enthalpy_permissive"
+    },
+    "config_overrides": {
+      "stress_balance.sia.grain_size_age_coupling": false,
+      "stress_balance.sia.e_age_coupling": false,
+      "stress_balance.sia.flow_law": "arr"
+    },
+    "note_on_theta": "Schoof bed-smoothing factor theta = 1 everywhere in the sheet (flat bed)"
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, grid, command line",
+    "parameters.csv": "stress_balance.sia.*, flow_law.*, constants.*, grid.*, enthalpy_converter.* config keys",
+    "inputs.nc": "all inputs + outputs (usurf, thk, topg, mask, enthalpy, age, uvel, vvel, wvel_rel, strain_heating, diffusivity[2], h_x, h_y, diffusive flux, F_b)",
+    "columns.csv": "per cell-center (i,j,k): geometry, E, computed u3/v3/w3/sigma3, exact T/u/v/w/sigma",
+    "staggered_D.csv": "per staggered point: h_x, h_y, |grad h|, D",
+    "diffusive_flux.csv": "per staggered point: D, grad h, q = -D grad h",
+    "delta.csv": "per staggered point and level: z, depth, pressure, E, stress, flow, delta = e*theta*2*p*flow, D (trapezoid of delta), theta",
+    "basal_frictional_heat.csv": "F_b (zero here: no sliding)",
+    "theta.csv": "Schoof bed-smoothness factor",
+    "exact_solution.csv": "exactFG reference: H and per-level T, U, w, Sig"
+  },
+  "checks": {
+    "delta_D_consistency": "D in delta.csv equals D in staggered_D.csv to full precision (trapezoidal integral)",
+    "diffusive_flux": "q = -D grad h exactly",
+    "theta": "1 for the flat bed inside the sheet",
+    "discrete_vs_exact": "u3, sigma3 differ from the exact solution by the expected discrete error (max |U| error ~0.23 m/yr at this resolution, same as PISM's own pism_siafd_test at Mx=31)"
+  }
+}

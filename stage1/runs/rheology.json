@@ -1,0 +1,39 @@
+{
+  "component": "ice_rheology",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "instantaneous_derivative",
+  "description": "Pointwise flow-law boundary traces for every flow law registered in FlowLawFactory. No grid, no time evolution: each dump row is a deterministic (input -> output) evaluation of the C++ function.",
+  "regenerate": {
+    "command": "cd stage1 && source runs/env.sh && instrument/instrument_rheology -dumps_dir stage1/dumps/rheology",
+    "note": "Output directory may be overridden with -dumps_dir"
+  },
+  "flow_laws": [
+    "isothermal_glen", "pb", "arr", "arrwarm", "gpbld", "hooke", "gk"
+  ],
+  "glen_exponent_n": 3,
+  "sample_grids": {
+    "enthalpies_J_per_kg": [0, 20000, 40000, 60000, 80000, 95000, 110000, 135000, 170000, 220000, 280000, 350000, 405000],
+    "pressures_Pa": [0, 1000000, 5000000, 10000000, 20000000, 30000000, 45000000],
+    "stresses_Pa": [1000, 3162.2776601683795, 10000, 31622.776601683795, 100000, 316227.76601683795, 1000000],
+    "grain_sizes_m": [0.0001, 0.001, 0.003, 0.01],
+    "gammas_s-2": "17 log-spaced values 1e-14 .. 1e-6",
+    "hardnesses_Pa_s^1/n": "11 log-spaced values 1e4 .. 1e9",
+    "enthalpy_note": "All E below E_liquid(p) for every p in pressures (E_liquid(4.5e7 Pa) ~= 416000 J kg^-1)"
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, command line",
+    "parameters.csv": "flow_law.*, constants.*, enthalpy_converter.*, energy.model, surface.pressure, stress_balance.*.Glen_exponent config keys",
+    "enthalpy_converter.csv": "E,p -> T, T_pa, omega, is_temperate, E_cts, E_l, T_m",
+    "enthalpy_converter_pressure.csv": "depth -> pressure",
+    "enthalpy_converter_constants.csv": "c_i, L(T_m)",
+    "second_invariant.csv": "U_x,U_y -> gamma = 0.5 D_ij D_ij",
+    "effective_viscosity_<law>.csv": "B,gamma,eps -> nu,dnu (eps=0 and Schoof regularization)",
+    "flowlaw_<law>.csv": "stress,E,p,gs -> softness, hardness, flow + EC conversions",
+    "flowlaw_<law>_batched.csv": "flow_n vectorized batch path",
+    "averaged_hardness_<law>.csv": "column (zlevels, enthalpy) -> \\bar B"
+  },
+  "checks": {
+    "paterson_budd_A_cold_223.15K": "A(223.15 K) = 3.258e-27 Pa^-3 s^-1 (matches Paterson-Budd Arrhenius)",
+    "isothermal_glen_B_averaged": "\\bar B = 6.81e7 Pa s^(1/n) (isothermal Glen at default T=263.15 K)"
+  }
+}

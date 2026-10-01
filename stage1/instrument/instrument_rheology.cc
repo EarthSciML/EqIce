@@ -199,7 +199,7 @@ void dump_second_invariant(const std::string &dir) {
       pism::Vector2d U_x{t.u_x * r, t.u_y * r};
       pism::Vector2d U_y{t.v_x * r, t.v_y * r};
       out << U_x.u << "," << U_x.v << "," << U_y.u << "," << U_y.v << ","
-          << pism::rheology::secondInvariant_2D(U_x, U_y) << "\n";
+          << pism::secondInvariant_2D(U_x, U_y) << "\n";
     }
   }
   out.close();
@@ -337,8 +337,24 @@ void dump_parameters(const Config &config, const std::string &dir) {
       }
     }
     if (match) {
+      // Skip metadata keys (key_doc, key_type, key_units, ...)
+      if (key.size() > 6 and
+          (key.compare(key.size() - 4, 4, "_doc") == 0 or
+           key.compare(key.size() - 5, 5, "_type") == 0 or
+           key.compare(key.size() - 6, 6, "_units") == 0 or
+           key.compare(key.size() - 4, 4, "_opt") == 0 or
+           key.compare(key.size() - 7, 7, "_option") == 0)) {
+        continue;
+      }
       try {
-        out << key << "," << config.get_string(key) << "\n";
+        const std::string type = config.type(key);
+        if (type == "number") {
+          out << key << "," << config.get_number(key) << " " << config.units(key) << "\n";
+        } else if (type == "boolean") {
+          out << key << "," << (config.get_flag(key) ? "true" : "false") << "\n";
+        } else {
+          out << key << "," << config.get_string(key) << "\n";
+        }
       } catch (const std::exception &) {
         out << key << ",<unreadable>\n";
       }

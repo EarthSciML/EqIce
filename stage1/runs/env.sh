@@ -22,3 +22,6 @@ export LD_LIBRARY_PATH="$MPI_PREFIX/lib:$GCC_PREFIX/lib64:$PETSC_DIR/$PETSC_ARCH
 export PKG_CONFIG_PATH="$PETSC_DIR/$PETSC_ARCH/lib/pkgconfig:$FFTW_PREFIX/lib/pkgconfig:$GSL_PREFIX/lib/pkgconfig:$LOCAL_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 export PISM_BIN="$REPO_ROOT/stage1/build/install/bin"
+export PISM_PREFIX="$REPO_ROOT/stage1/build/install"
+export LD_LIBRARY_PATH="$PISM_PREFIX/lib64:${LD_LIBRARY_PATH:-}"
+export PKG_CONFIG_PATH="$PISM_PREFIX/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"

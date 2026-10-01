@@ -24,16 +24,37 @@ updated: 2026-09-30.
   inputs→outputs, and derivative-vs-integrated classification. This is the
   deliverable of Stage-1 step 1 and the target list for instrumentation.
 
-## Stage 1 — Instrumentation (in progress)
+## Milestone 2 — Stage-1 instrumentation scaffolding + first component traces (rheology, SIA) ✅
+
+- **Instrumentation scaffolding** ✅ — `stage1/build/build_instrument.sh`
+  builds all `stage1/instrument/instrument_*.cc` drivers against the installed
+  PISM library (fixed to use the working env + correct pkg-config paths).
+- **Rheology traces** ✅ — `instrument_rheology.cc` (completed; fixes: correct
+  `secondInvariant_2D` namespace, typed config dump with units) → 36 dump files
+  in `stage1/dumps/rheology/`: softness/hardness/flow (+vectorized `flow_n`,
+  +effective viscosity, +averaged hardness) for all 7 flow laws, enthalpy
+  converter, second invariant, parameters. Validated: Paterson-Budd
+  A(223.15 K) = 3.26e-27 Pa⁻³ s⁻¹, isothermal-Glen B̄ = 6.81e7 Pa s^(1/n).
+- **SIA traces** ✅ — new `instrument_sia.cc`: one full SIA update from the
+  test-F exact-solution state (flat bed, `arr` flow law, no sliding) → 11 dump
+  files in `stage1/dumps/sia/`, including the complete
+  `(alpha, pressure, E, stress, flow, delta) -> D` chain (verified: trapezoid of
+  delta = D to full precision) and per-column computed-vs-exact u3/v3/w3/Σ.
+- **Run configs recorded** ✅ — `stage1/runs/rheology.json`, `stage1/runs/sia.json`
+  (exact commands, grids, sample distributions, and check values).
+- **New C++ bug found** — `StressBalance::Inputs::dump()` writes an undefined
+  NetCDF variable (bugs.md #4); worked around in the SIA driver.
+
+## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`
-- [ ] Step 2: instrument each boundary to dump inputs/outputs
-      (in progress — `stage1/instrument/instrument_rheology.cc` started;
-      rheology is the first component per PLAN.md §10)
+- [x] Step 2: instrument boundaries to dump inputs/outputs — **rheology + SIA done**
+      (first two boundaries per PLAN.md §10); remaining: SSA, energy, age, basal,
+      hydrology, bed, surface/ocean/calving, geometry
 - [ ] Step 3: dump subassembly I/O (e.g. SSA linear solve vs. SIA stencil)
-- [ ] Step 4: record run configurations → `stage1/runs/README.md` ✅ (configs);
-      curated dumps pending step 2
-- [ ] Step 5: extract select dumps into numeric test tuples
+- [x] Step 4: record run configurations → `stage1/runs/README.md` +
+      `stage1/runs/{rheology,sia}.json`; dumps stored in `stage1/dumps/`
+- [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (not started)
 
@@ -53,6 +74,18 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
 - Local PISM patch: `stage1/pism/CMake/FindUDUNITS2.cmake` (UDUNITS-2 optional
   when expat is absent — see bugs.md #1)
 - Known issue: full-model `-test V` fails (bugs.md #3); use `pism_ssa_test_*`
+- Known issue: `StressBalance::Inputs::dump()` broken (bugs.md #4); drivers
+  write NetCDF directly
+
+## Dumps
+
+- `stage1/dumps/rheology/` — 36 files, ~3 MB (regenerate:
+  `instrument/instrument_rheology`)
+- `stage1/dumps/sia/` — 11 files, ~28 MB (regenerate:
+  `instrument/instrument_sia -Mx 31 -My 31 -Mz 61`)
+- Full dumps are gitignored (`stage1/dumps/*`); `stage1/dumps/README.md`
+  documents the layout and regeneration. Numeric test tuples extracted from
+  these go into Stage-2 `.esm` `tests` blocks.
 
 ## Repository layout (see PLAN.md §7)
 

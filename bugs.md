@@ -80,6 +80,27 @@ impact, whether the `.esm` reproduces or corrects it, and status.
   upstream fix: compute `shelf_base_temperature` in `Constant::init_impl`, or
   move `m_ocean->update` before `energy_step` in `IceModel::step`.
 
+## 4. StressBalance::Inputs::dump() aborts: writes an undefined config variable
+
+- **Location:** `src/stressbalance/StressBalance.cc`
+  (`Inputs::dump(const char *filename)`), calls
+  `io::write_config(*config, "pism_config", output)`.
+- **Description:** `Inputs::dump()` is dead code in v2.3.2 (never called by the
+  model). It creates an output file with `SynchronousOutputWriter` but never
+  `define_variable`s the `pism_config` variable before `write_config()` calls
+  `file.write_text("pism_config", ...)`. Running it aborts with
+  `PISM ERROR: NetCDF: Variable not found while writing variable 'pism_config'`.
+  This is the natural input-dump hook for Stage-1 instrumentation of the
+  stress-balance boundary.
+- **Impact on results:** none for model runs (dead code); a Stage-1
+  workaround was needed — the SIA driver (`stage1/instrument/instrument_sia.cc`)
+  writes the input+output NetCDF directly with the same writer/define/write
+  pattern instead of calling `Inputs::dump()`.
+- **Reproduced/corrected in .esm:** n/a (C++ I/O issue).
+- **Status:** documented; candidate upstream fix: `file.define_variable(...)`
+  for `pism_config` before writing, or drop the `write_config` call from
+  `Inputs::dump()`.
+
 ---
 (no `.esm`-reproducible physics bugs found yet — Stage 2 will populate this file
 as component tests are compared against the C++ implementations.)
