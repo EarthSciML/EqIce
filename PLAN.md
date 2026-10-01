@@ -70,12 +70,18 @@ Purpose: produce authoritative input/output traces to build tests from.
 built in `stage1/build/`; reference run configs in `stage1/runs/README.md`;
 boundary catalog in `stage1/boundaries.md`). Milestone 2 complete — rheology,
 SIA, and SSA boundaries instrumented. Milestone 3 in progress — the energy,
-age, basal-strength, hydrology (Routing), and bed (PointwiseIsostasy)
-boundaries are now instrumented too (drivers in `stage1/instrument/`, dumps in
-`stage1/dumps/`, run configs in
-`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed}.json`).
-Next: the remaining hydrology models (Distributed/SteadyState) and the
-LingleClark/Given bed models. See `PROGRESS.md`.
+age, basal-strength, hydrology (Routing), bed (PointwiseIsostasy), and
+calving/front-retreat + frontal-melt boundaries are now instrumented too
+(drivers in `stage1/instrument/`, dumps in `stage1/dumps/`, run configs in
+`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving}.json`).
+The calving boundary (test V / van der Veen CFBC shelf, square 65×65 grid)
+covers EigenCalving, vonMisesCalving, HayhurstCalving, CalvingAtThickness +
+FloatKill, the FrontalMeltPhysics kernels, and the Constant frontal-melt model;
+front-retreat geometry update and prescribed-retreat/Given/Discharge frontal-melt
+models are deferred.
+Next: the remaining hydrology models (Distributed/SteadyState), the
+LingleClark/Given bed models, and the surface/ocean/geometry boundaries.
+See `PROGRESS.md`.
 
 1. Identify discrete subassembly boundaries in the C++ codes matching the
    component inventory above. → **`stage1/boundaries.md`** (done).
@@ -167,12 +173,17 @@ whether the `.esm` reproduces or corrects it, and status.
    strength (`instrument_basal_strength.cc`, `MohrCoulombPointwise` + basal
    resistance laws + `MohrCoulombYieldStress` tauc map), hydrology
    (`instrument_hydrology.cc`, `hydrology::Routing` one-step trace + pointwise
-   flux law + staggered substep subassembly), and bed (`instrument_bed.cc`,
+   flux law + staggered substep subassembly), bed (`instrument_bed.cc`,
    `bed::PointwiseIsostasy` two-interval trace + load accumulator +
    `compute_load`/update-law pointwise targets; LingleClark/Given bed models
-   deferred) done; next: the remaining hydrology models (Distributed,
-   SteadyState/EmptyingProblem, NullTransport cross-check),
-   surface/ocean/calving, geometry.
+   deferred), and calving/front retreat + frontal melt
+   (`instrument_calving.cc`, test V / van der Veen CFBC shelf on a square
+   65×65 grid: EigenCalving, vonMisesCalving, HayhurstCalving,
+   CalvingAtThickness + FloatKill, FrontalMeltPhysics kernels, Constant
+   frontal-melt model; front-retreat geometry update and prescribed-retreat /
+   Given / Discharge frontal-melt models deferred) done; next: the remaining
+   hydrology models (Distributed, SteadyState/EmptyingProblem, NullTransport
+   cross-check), surface/ocean/geometry.
 4. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
    bed → surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.

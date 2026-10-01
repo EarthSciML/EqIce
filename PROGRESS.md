@@ -155,6 +155,70 @@ updated: 2026-10-01.
   dumped. The `Given` and `LingleClark`/`LingleClarkSerial` models are not
   instrumented (deferred; noted in `stage1/boundaries.md` §8).
 
+## Milestone 3 (continued) — calving / front retreat + frontal melt instrumented ✅
+
+- **Calving traces** ✅ — new `instrument_calving.cc` on the van der Veen CFBC
+  shelf state (same state as `instrument_ssa.cc`, but on a *square* grid
+  Mx=My=65: the rate-based calving components reject non-square cells in
+  `init()`, so the SSA run's 61x3 grid cannot be used — see
+  `stage1/runs/calving.json`; 5 ocean columns beyond the front keep the ±2-cell
+  calving sampling in the interior). The velocity the calving models act on is
+  the actual SSA solution (0.062% avg error vs exact).
+  - **EigenCalving** (D): dumps the strain-rate invariants `eigen1`/`eigen2`
+    from `compute_2D_principal_strain_rates` plus the rate. With the exact
+    shelf velocity `eigen2 = 0` *exactly* (1-D shelf), so the rate is 0
+    everywhere (compressive branch); `eigen1` matches the analytic
+    `du/dx = C H^3` to 0.15% on interior cells (the i=0,1 boundary strain
+    rates are contaminated by the stale velocity ghost at i=-1, as in the
+    model). A manufactured divergent velocity `v = 0.05 u cos(2 pi y / L)`
+    exercises the nonzero branch `rate = K * eigen1_avg * eigen2_avg` (K =
+    3e16 m s, set from the config default 0.0): max rate 297.8 m/yr at 32 of
+    65 front cells; the reconstructed formula matches the component to 0.
+  - **vonMisesCalving** (D, clean pointwise rate — not deferred): it uses the
+    2-D strain-rate invariants + the Glen flow-law averaged hardness
+    (`sigma_tilde = sqrt(3) B e_s^(1/n)`), no iterative 3-D stress solve.
+    Front-cell `(60,32)`: `e_s = 1.1785e-11 s^-1`, `sigma_tilde = 74891 Pa`,
+    `rate = 71.13 m/yr`; reconstruction matches the component to 0.
+  - **HayhurstCalving** (D, clean pointwise): rate range 1077–7906 m/yr over
+    the 3900 icy cells; the floating-shelf omega adjustment and the
+    `sigma_0 -> max(sigma_0, threshold)` clamp verified. The component's
+    intended propagation of the mean icy-neighbor rate to ice-free cells next
+    to ice verified to 0.
+  - **CalvingAtThickness** (I, in-place): with threshold 300 m removes exactly
+    the 65-cell front column (H = 188.8 m, floating, next to ice-free ocean);
+    mask 3 -> 4, thickness -> 0 dumped per cell.
+  - **FloatKill** (I, in-place): removes all 3900 floating cells (default
+    config); flotation thickness h_f = 1129.67 m confirms the removal set.
+- **Frontal melt traces** ✅ — same driver:
+  - `FrontalMeltPhysics::frontal_melt_from_undercutting` / `_from_ismip6`
+    pointwise kernels `(h, q_sg, TF) -> q_m` over deterministic grids (pure
+    `.esm` targets; `q_m = (A h q_sg^alpha + B) TF^beta`); undercutting clamps
+    negative/zero inputs to 0, ISMIP6 does not.
+  - `frontalmelt::Constant` on the fully floating shelf: default config
+    (`include_floating_ice = no`) -> 0 melt (no grounded ice); with
+    `include_floating_ice = yes` -> 1 m/day on ice and a front-cell retreat
+    rate `(rho_i/rho_w) * 1 = 0.885214 m/day`.
+- **Dumps** ✅ — `stage1/dumps/calving/` (13 files, ~4.8 MB): `meta.txt`,
+  `parameters.csv`, `inputs.nc`, `eigen_calving.csv`, `eigen_calving_divergent.csv`,
+  `vonmises_calving.csv`, `hayhurst_calving.csv`, `calving_at_thickness.csv`,
+  `float_kill.csv`, `frontal_melt_undercutting.csv`, `frontal_melt_ismip6.csv`,
+  `frontal_melt_constant.csv`, plus `thickness_threshold_input.nc` (the minimal
+  input file `CalvingAtThickness`'s constructor requires; no threshold variable,
+  so the constant config threshold is used).
+- **Run config** ✅ — `stage1/runs/calving.json` (grid, config overrides,
+  dump files, check values).
+- Deterministic: dumps byte-for-byte identical across reruns.
+- Deferred (documented in boundaries.md §9/§6.4 and the dumps README):
+  `FrontRetreat::update_geometry` (retreat-rate application over dt, **I**),
+  `PrescribedRetreat` (**I**, ISMIP6 parameterized retreat mask), the
+  `Given`/`DischargeGiven`/`DischargeRouting` frontal-melt models, and the
+  `calving.rate_scaling` modifier.
+- **Grid note (important for Stage 2):** the flow-line 61x3 grid of the SSA
+  dump cannot be used for the calving components — `EigenCalving`,
+  `vonMisesCalving` and `HayhurstCalving` all throw on non-square cells
+  (`|dx-dy|/min(dx,dy) > 1e-2`). The calving dumps use a square 65x65 grid with
+  the same uniform-in-y shelf state.
+
 ## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`

@@ -22,6 +22,7 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 | `basal_strength/` | Basal yield stress (Mohr-Coulomb) + basal resistance laws | `instrument/instrument_basal_strength.cc` | `runs/basal_strength.json` | `instrument/instrument_basal_strength -Mx 31 -My 31` |
 | `hydrology/` | Subglacial hydrology (Routing/Shreve, one dt step, test-F geometry) | `instrument/instrument_hydrology.cc` | `runs/hydrology.json` | `instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25` |
 | `bed/` | Bed deformation (PointwiseIsostasy, two update intervals, test-F load history) | `instrument/instrument_bed.cc` | `runs/bed.json` | `instrument/instrument_bed -Mx 31 -My 31` |
+| `calving/` | Calving (Eigen / von Mises / Hayhurst / thickness / float-kill) + frontal melt (physics kernels + Constant) on the van der Veen CFBC shelf | `instrument/instrument_calving.cc` | `runs/calving.json` | `instrument/instrument_calving -Mx 65 -My 65` |
 
 The energy and age traces come from the same driver (they share the test-F
 state). All drivers accept `-dumps_dir <path>` to redirect the output; the
@@ -39,6 +40,7 @@ stage1/instrument/instrument_energy -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps
 stage1/instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir stage1/dumps/basal_strength
 stage1/instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir stage1/dumps/hydrology
 stage1/instrument/instrument_bed -Mx 31 -My 31 -dumps_dir stage1/dumps/bed
+stage1/instrument/instrument_calving -Mx 65 -My 65 -dumps_dir stage1/dumps/calving
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -153,6 +155,71 @@ component must reproduce.
     (max err 1.65e-24 m/s), and the load accumulator reproduces the
     time-average of the call loads exactly (the load is `H0 + dH/2` over
     interval 1 and `H0 + dH` over interval 2).
+- **Calving + frontal melt** (`calving/`): the calving and frontal-melt
+  components run on the van der Veen CFBC shelf state (the same state as
+  `ssa/`, but on a *square* grid `Mx = My = 65` because `EigenCalving`,
+  `vonMisesCalving` and `HayhurstCalving` reject non-square grid cells in
+  `init()`, and with 5 ocean columns beyond the calving front at `i = 60` so
+  the `±2`-cell calving-rate sampling stays in the interior). The velocity the
+  calving models act on is the actual SSA solution (0.062% average error vs the
+  exact van der Veen solution).
+  - `calving/eigen_calving.csv`: per cell `(H, mask, u, v, eigen1, eigen2,
+    du_dx_analytic = C H^3, eigen1_avg, eigen2_avg, N_avg, rate)` for the
+    exact-velocity run. `compute_2D_principal_strain_rates` gives `eigen1 =
+    u_x` (matched to the analytic `C H^3` to 0.15% on interior cells) and
+    `eigen2 = 0` *exactly* (1-D shelf), so the eigen-calving condition
+    `eigen2 > 0 and eigen1 > 0` fails and the rate is 0 everywhere — a clean
+    test of the compressive branch. Note the strain rates near the west
+    Dirichlet boundary (i = 0, 1) are contaminated by the stale velocity ghost
+    at `i = -1` (non-periodic boundary, as in the model).
+  - `calving/eigen_calving_divergent.csv`: the same quantities for a
+    manufactured divergent velocity `v = 0.05 u cos(2 pi y / L)` (periodic in
+    y), exercising the nonzero branch: `rate = K * eigen1_avg * eigen2_avg`
+    (with `K = calving.eigen_calving.K = 3e16 m s`, set from the config
+    default 0.0) at 32 of the 65 front cells; max rate 297.8 m/yr. The dumped
+    `eigen1_avg`/`eigen2_avg` reproduce the component's rate exactly.
+  - `calving/vonmises_calving.csv`: per cell the eigen rates and the rate; at
+    the 65 front cells also the reconstructed averaging `(|v|_avg, hardness_avg,
+    e_s, sigma_tilde)` so the `.esm` target `rate = |v|_avg * sigma_tilde /
+    sigma_max` with `sigma_tilde = sqrt(3) B e_s^(1/n)` is reproduced exactly
+    (front cell `(60,32)`: `e_s = eigen1/sqrt(2) = 1.1785e-11 s^-1`,
+    `sigma_tilde = 74891 Pa`, `rate = 71.13 m/yr`).
+  - `calving/hayhurst_calving.csv`: per cell `(H, water_depth, omega, sigma_0,
+    threshold, rate)` for the pointwise Hayhurst law (with the floating-shelf
+    adjustment `omega = water_depth / (water_depth + (1 - rho_i/rho_w) H)`);
+    rate range 1077–7906 m/yr over the 3900 icy cells. The component then
+    (intentionally) propagates the mean of icy neighbors' rates to ice-free
+    cells next to ice — verified to the last bit in `runs/calving.json`.
+  - `calving/calving_at_thickness.csv`: `CalvingAtThickness::update(t=0,
+    dt=1 yr)` with `calving.thickness_calving.threshold = 300 m` removes
+    exactly the 65-cell front column (i = 59, `H = 188.77 m < 300`,
+    floating, next to ice-free ocean): mask 3 → 4, thickness → 0.
+  - `calving/float_kill.csv`: `FloatKill` with default config removes all 3900
+    floating cells (mask 3 → 4); the analytic flotation thickness
+    `h_f = (sea_level - bed) rho_w/rho_i = 1129.67 m` confirms every removed
+    cell is floating.
+  - `calving/frontal_melt_undercutting.csv` / `frontal_melt_ismip6.csv`: the
+    two pointwise `FrontalMeltPhysics` kernels `(h, q_sg, TF) -> q_m` over
+    deterministic grids (the undercutting kernel clamps negative/zero inputs to
+    `q_m = 0`; the ISMIP6 kernel applies the raw power law). Pure `.esm` test
+    targets with `q_m = (A h q_sg^alpha + B) TF^beta`.
+  - `calving/frontal_melt_constant.csv`: the `Constant` frontal-melt model on
+    the fully floating shelf. Default config (`include_floating_ice = no`)
+    gives a zero melt rate (no grounded ice); with `include_floating_ice =
+    yes` the melt rate is 1 m/day on icy cells and the front-cell retreat rate
+    is `(rho_i/rho_w) * 1 = 0.885214 m/day` (`retreat_rate =
+    H_submerged/H_threshold * melt`, floating front: `H_submerged = (rho_i/
+    rho_w) H_threshold` with the part-grid threshold thickness).
+  - `calving/inputs.nc` has the geometry, the SSA velocity, the enthalpy, and
+    all three calving-rate outputs. `calving/thickness_threshold_input.nc` is
+    the minimal NetCDF-3 input file the `CalvingAtThickness` constructor
+    requires (it contains no `thickness_calving_threshold` variable, so the
+    constant config threshold is used).
+  - The front cell is 2 cells from the y-periodic edges; the `j ± 2` sampling
+    there reads non-periodic ghost memory that happens to be ice-free, so the
+    rates are identical to the interior front cells (verified: the dumps are
+    byte-for-byte deterministic across reruns). This is a latent model edge
+    case, not something the `.esm` reimplementation needs to reproduce.
 - The test-F/V states mean every dumped quantity has an exact reference value
   (or a clean null state, as with age = 0); the discrete-vs-exact differences
   are the expected discretization error of the C++ model, which the `.esm`

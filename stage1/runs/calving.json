@@ -1,0 +1,86 @@
+{
+  "component": "calving",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "instantaneous_derivative",
+  "description": "Calving (front retreat) + frontal-melt boundary traces on the van der Veen CFBC shelf state (same state as runs/ssa.json but on a SQUARE grid -- see the domain note). (a) Rate-based calving: EigenCalving (strain-rate invariants + rate, exact-velocity run and a manufactured divergent-velocity run exercising the nonzero branch), vonMisesCalving (clean pointwise rate from the von Mises criterion sigma_tilde = sqrt(3) B e_s^(1/n)), HayhurstCalving (pointwise threshold-on-flotation rate with the floating-shelf adjustment). (b) In-place mask removal: CalvingAtThickness (thickness-threshold) and FloatKill, with mask/thickness in/out per cell. (c) Frontal melt: the FrontalMeltPhysics pointwise kernels (undercutting + ISMIP6) over (h, q_sg, TF) grids, and the Constant frontal-melt model on the shelf (default config -> zero on a fully floating shelf; with frontal_melt.include_floating_ice = yes -> a melt-rate map and the front-cell retreat rate).",
+  "regenerate": {
+    "command": "source stage1/runs/env.sh && stage1/instrument/instrument_calving -Mx 65 -My 65 -dumps_dir stage1/dumps/calving",
+    "note": "Run from the repo root (the -dumps_dir path is relative to the working directory). Override the grid with -Mx/-My (must be equal) and the output with -dumps_dir. The driver creates the thickness-calving input file stage1/dumps/calving/thickness_threshold_input.nc (a minimal NetCDF-3 file without the thickness_calving_threshold variable, so the constant config threshold is used)."
+  },
+  "domain": {
+    "Lx_m": 250000,
+    "Ly_m": 250000,
+    "registration": "CELL_CENTER",
+    "periodicity": "Y_PERIODIC",
+    "Mx": 65,
+    "My": 65,
+    "dx_m": 7692.307692,
+    "note": "SQUARE grid required: EigenCalving, vonMisesCalving and HayhurstCalving reject non-square cells (|dx-dy|/min(dx,dy) <= 1e-2 in init()), so the SSA run's 61x3 flow-line grid cannot be used. The shelf state is uniform in y, so the exact solution H(x), u(x) = V0 H0 / H(x), v = 0 is unchanged. The shelf occupies columns i in [0, 59] (60 ice columns, same as the 61-column SSA run) and 5 ocean columns beyond the calving front (i = 60..64) so the +-2-cell calving-rate sampling stays in the interior."
+  },
+  "setup": {
+    "flow_law": "isothermal_glen with B = 1.9e8 Pa s^(1/n) (set via flow_law.isothermal_Glen.ice_softness = B^-n), n = 3",
+    "sliding": "none (floating shelf, tauc = 0)",
+    "bed": "-1000 m everywhere (shelf is floating)",
+    "van_der_Veen": {
+      "V0_m_per_year": 300,
+      "H0_m": 600,
+      "C_Pa-3_s-1": 2.45e-18,
+      "front_H_m": 188.77377455206789,
+      "note": "C is the 'typical constant ice parameter'; corresponds to the isothermal Glen B = 1.9e8. The exact along-flow strain rate is du/dx = C H^3."
+    },
+    "ssa_config_overrides": {
+      "stress_balance.ssa.compute_surface_gradient_inward": false,
+      "stress_balance.calving_front_stress_bc": true,
+      "stress_balance.ssa.fd.flow_line_mode": true,
+      "stress_balance.ssa.fd.extrapolate_at_margins": false,
+      "stress_balance.ssa.flow_law": "isothermal_glen"
+    },
+    "calving_config_overrides": {
+      "calving.eigen_calving.K": "3e16 m s (set from the config default 0.0 so the formula branch is exercised; ~1e9 m a, within the cited range 3e16..1e19 m s)",
+      "calving.thickness_calving.threshold": "300 m (set from the config default 50 m so the front, H = 188.8 m, is calved)",
+      "calving.thickness_calving.file": "stage1/dumps/calving/thickness_threshold_input.nc (created by the driver; no thickness_calving_threshold variable, so init() falls back to the constant threshold)",
+      "calving.float_kill.margin_only": "false (default)",
+      "calving.float_kill.calve_near_grounding_line": "true (default)",
+      "calving.vonmises_calving.sigma_max": "1e6 Pa (default)",
+      "calving.hayhurst_calving.*": "defaults (B_tilde 65 (MPa)^r/yr, exponent_r 0.43, sigma_threshold 0.17 MPa)"
+    },
+    "frontal_melt_config": {
+      "frontal_melt.constant.melt_rate": "1 m/day (default)",
+      "frontal_melt.include_floating_ice": "no for the default run (all-zero melt on the fully floating shelf); toggled to yes for the second Constant-model run",
+      "frontal_melt.routing.parameter_a": "3e-4, parameter_b 0.15, power_alpha 0.39, power_beta 1.18 (defaults; the FrontalMeltPhysics kernel parameters)"
+    },
+    "velocity_for_calving": "the actual SSA solution from one SSAFD solve on this geometry (avg error 0.0619% vs the exact solution)",
+    "divergent_velocity": "manufactured field v = 0.05 u cos(2 pi y / L), L = 500 km, used only for the eigen-calving nonzero-branch exercise"
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, grid, front column, command line",
+    "parameters.csv": "calving.*, frontal_melt.*, constants.*, grid.* config keys",
+    "inputs.nc": "geometry (usurf, thk, topg, mask, sea_level), SSA velocity (u,v), enthalpy, and the three calving-rate outputs",
+    "eigen_calving.csv": "per cell: (i, j, x, y, H, mask, u, v, eigen1, eigen2, du_dx_analytic = C H^3, front-cell sampling eigen1_avg/eigen2_avg/N_avg, rate). Exact velocity: eigen2 = 0 exactly -> rate 0 everywhere",
+    "eigen_calving_divergent.csv": "same for the manufactured divergent velocity; nonzero rate at 32 of the 65 front cells where eigen2 > 0",
+    "vonmises_calving.csv": "per cell eigen rates + rate; at the 65 front cells also the reconstructed |v|_avg, hardness_avg, e_s, sigma_tilde; rate = |v|_avg sigma_tilde / sigma_max",
+    "hayhurst_calving.csv": "per cell (H, mask, sea_level, bed, water_depth, omega, sigma_0, threshold, rate); rate propagated to ice-free cells next to ice as the mean of icy neighbors (intended)",
+    "calving_at_thickness.csv": "per cell H_in/H_out, mask_in/mask_out, threshold, removed",
+    "float_kill.csv": "per cell H_in/H_out, mask_in/mask_out, h_f = (sea_level - bed) rho_w / rho_i, floating, removed",
+    "frontal_melt_undercutting.csv": "(h, q_sg, TF) -> q_m m/day, with the nonnegativity clamps",
+    "frontal_melt_ismip6.csv": "(h, q_sg, TF) -> q_m m/day, without the clamps",
+    "frontal_melt_constant.csv": "Constant model melt + retreat rates for both include_floating_ice settings; front-cell H_threshold/H_submerged",
+    "thickness_threshold_input.nc": "minimal NetCDF-3 input file the CalvingAtThickness constructor requires (no threshold variable -> constant config threshold)"
+  },
+  "checks": {
+    "velocity_error": "SSA solution matches the van der Veen exact solution: average percent error 0.0619%, max vector err 1.14448 m/yr (max u err 1.14448, max v err 0)",
+    "strain_rate_analytic": "eigen1 matches du/dx = C H^3 on interior floating cells (i in [8, 56]): max relative error 0.00149777 (0.15%, FD truncation + SSA discretization); max |eigen2| = 7.916e-25 (eigen2 = A - q = 0 exactly for the 1-D shelf, v = 0). Reference: at i=1 (west boundary, stale velocity ghost + steep gradient) rel err = 0.121153; at i=58 (near front) = 0.00147559",
+    "eigen_exact_zero": "with the exact shelf velocity eigen2 = 0 at the sampled front-adjacent cell, the condition (eigen2 > 0 and eigen1 > 0) fails and the calving rate is 0 everywhere",
+    "eigen_divergent": "rate = K * eigen1_avg * eigen2_avg where the condition holds (max rate 9.43843e-06 m/s = 297.848 m/yr at 32 of 65 front cells); max |component rate - reconstructed formula| = 0 over all cells",
+    "eigen_divergent_sample": "front cell (60,2): eigen1_avg = 1.6680653718339609e-11 s^-1, eigen2_avg = 4.505249114777302e-12 s^-1, rate = 3e16 * eigen1_avg * eigen2_avg = 2.2545150119536872e-06 m/s = 71.145563 m/yr",
+    "vonmises_front": "front cell (60,32): |v|_avg = 3.0098147736581051e-05 m/s (sampled at (58,32)), hardness_avg = 1.9e8 Pa, e_s = eigen1/sqrt(2) = 1.1785481916737405e-11 s^-1, sigma_tilde = sqrt(3) * B * e_s^(1/3) = 74891.0656 Pa, rate = |v|_avg * sigma_tilde / sigma_max = 2.2540823575928672e-06 m/s = 71.131910 m/yr; max |component rate - reconstructed| = 0 over the 65 front cells",
+    "hayhurst_range": "rate positive on all 3900 icy cells (water depth 1000 m): range [3.41321e-05, 2.50547e-04] m/s = [1077.11, 7906.5] m/yr; front cell (59,32): omega = 0.97879098434222345 (floating-shelf adjustment), sigma_0 clamped to threshold 0.17 MPa (the (0.4 - 0.45 (omega-0.065)^2) rho_i g H term is below threshold for the thin shelf), rate = 3.4132142868130762e-05 m/s = 1077.1055 m/yr",
+    "hayhurst_propagation": "ice-free cells next to ice (63 counted in the interior) get the mean of their icy neighbors' rates: max |rate - mean(icy neighbors)| = 0",
+    "calving_at_thickness": "65 cells removed (the whole front column i=59: floating, next to ice-free ocean, H = 188.7738 < 300 m threshold) -> thickness 0 and mask 3 -> 4; all other cells unchanged",
+    "float_kill": "all 3900 floating cells removed (mask 3 -> 4, thickness -> 0); flotation thickness h_f = (0 - (-1000)) * 1028/910 = 1129.6703 m and every removed cell has H < h_f (i.e. is floating)",
+    "frontal_melt_undercutting": "q_m = (A h q_sg^alpha + B) TF^beta monotone non-decreasing in h, q_sg, and TF over the sample grid; q_m(100, 1, 1) = 0.18 m/day = (3e-4*100 + 0.15)*1; q_m = 0 for h <= 0 or q_sg < 0 or TF < 0 (clamped)",
+    "frontal_melt_ismip6": "same formula without the clamps: q_m(h = -5, q_sg = 1, TF = 1) = 0.1485 m/day (nonzero)",
+    "frontal_melt_constant_default": "with include_floating_ice = no the melt rate is 0 everywhere (no grounded ice on the fully floating shelf)",
+    "frontal_melt_constant_floating": "with include_floating_ice = yes: melt rate = 1 m/day on 4030 cells (3900 icy + 130 ice-free-ocean cells next to ice); front-cell retreat rate = 0.885214007782101 m/day = (rho_i/rho_w) * 1 m/day with rho_i/rho_w = 910/1028"
+  }
+}
