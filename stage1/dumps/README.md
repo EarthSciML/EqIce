@@ -19,6 +19,7 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 | `ssa/` | SSA stress balance (test V / van der Veen shelf) | `instrument/instrument_ssa.cc` | `runs/ssa.json` | `instrument/instrument_ssa -Mx 61 -My 3` |
 | `energy/` | Ice energy (EnthalpyModel, one dt step, test-F forcing) | `instrument/instrument_energy.cc` | `runs/energy_age.json` | `instrument/instrument_energy -Mx 31 -My 31 -Mz 61` |
 | `age/` | Ice age (AgeModel, one dt step, test-F velocity) | `instrument/instrument_energy.cc` | `runs/energy_age.json` | (same driver; see `energy/`) |
+| `basal_strength/` | Basal yield stress (Mohr-Coulomb) + basal resistance laws | `instrument/instrument_basal_strength.cc` | `runs/basal_strength.json` | `instrument/instrument_basal_strength -Mx 31 -My 31` |
 
 The energy and age traces come from the same driver (they share the test-F
 state). All drivers accept `-dumps_dir <path>` to redirect the output; the
@@ -33,6 +34,7 @@ stage1/instrument/instrument_rheology -dumps_dir stage1/dumps/rheology
 stage1/instrument/instrument_sia -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps/sia
 stage1/instrument/instrument_ssa -Mx 61 -My 3 -dumps_dir stage1/dumps/ssa
 stage1/instrument/instrument_energy -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps -dt_years 10
+stage1/instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir stage1/dumps/basal_strength
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -69,6 +71,24 @@ component must reproduce.
   for one dt step from age = 0. Deep-interior age = dt exactly (max = dt);
   the top coarse levels carry the age-0 surface transition advected down by
   w*dt.
+- **Basal strength** (`basal_strength/`): the pointwise Mohr-Coulomb functions
+  are pure `.esm` test targets:
+  - `effective_pressure.csv`: `(delta, P_overburden, water_thickness) ->
+    N_till = min(P, N0 (delta P/N0)^s 10^((e0/Cc)(1-s)))` (with the un-clamped
+    interior value dumped too). At `W=0`, `N_till = P_overburden`; at
+    `W = W_till_max`, `N_till = delta*P`; monotone non-increasing in `W`.
+  - `yield_stress.csv`: `tauc = c0 + tan(phi) N_till`; `till_friction_angle.csv`
+    is the exact inverse (round trip `phi -> tauc -> phi` to 1e-15 deg).
+  - `drag_{plastic,pseudo_plastic,regularized}.csv`: `(tauc, vx, vy) -> beta`
+    with `tau_b = -beta v`, `dbeta` (w.r.t. `alpha = 0.5|v|^2`), and a
+    finite-difference `dbeta_fd` that agrees to ~1e-10. Plastic limit
+    `|tau_b| -> tauc` at high speed verified.
+  - `inputs.nc` + `tauc_map.csv`: the full `MohrCoulombYieldStress::update`
+    on the test-F exact geometry (flat bed, thickness = exact H, Mx=My=31)
+    with smooth prescribed `W_till(r)` and `phi(r)` fields — the real
+    `update_impl` path including the ice-free `tauc = 1e6` branch. The
+    effective pressure field `N_till` is recomputed pointwise from the same
+    inputs (the component does not store it).
 - The test-F/V states mean every dumped quantity has an exact reference value
   (or a clean null state, as with age = 0); the discrete-vs-exact differences
   are the expected discretization error of the C++ model, which the `.esm`

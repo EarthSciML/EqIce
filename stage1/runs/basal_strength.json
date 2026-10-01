@@ -1,0 +1,83 @@
+{
+  "component": "basal_strength",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "instantaneous_derivative",
+  "description": "Basal-strength boundary traces: (a) MohrCoulombPointwise sample grids for effective pressure N_till, yield stress tauc = c0 + tan(phi) N_till, and the till_friction_angle inverse (round-trip); (b) drag/drag_with_derivative of the three basal resistance laws (plastic, pseudo-plastic, regularized Coulomb) over (tauc, vx, vy) grids spanning zero/slow/fast sliding; (c) a tauc map computed by the actual MohrCoulombYieldStress component on the verification test-F exact geometry (flat bed, thickness = exact H, Mx=My=31) with a prescribed smooth till-water-thickness field and a prescribed till-friction-angle field.",
+  "regenerate": {
+    "command": "source stage1/runs/env.sh && stage1/instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir stage1/dumps/basal_strength",
+    "note": "Run from the repo root. Override grid with -Mx/-My and output with -dumps_dir. (The other drivers' run configs say 'cd stage1 && ...'; that path prefix is wrong for -dumps_dir, which is relative to the working directory -- the README regenerating block runs everything from the repo root.)"
+  },
+  "domain": {
+    "Lx_m": 900000,
+    "Ly_m": 900000,
+    "registration": "CELL_CENTER",
+    "periodicity": "NOT_PERIODIC",
+    "Mx": 31,
+    "My": 31,
+    "dx_m": 58064.5,
+    "note": "2-D grid only (no vertical levels needed for the basal boundary)"
+  },
+  "sample_grids": {
+    "deltas": [0.01, 0.02, 0.05, 0.2],
+    "P_overburden_Pa": [0, 1000000, 5000000, 10000000, 20000000, 30000000, 50000000],
+    "water_thickness_m": [-1, 0, 0.1, 0.5, 1, 1.5, 2, 2.5, 4],
+    "phis_deg": [0, 5, 10, 20, 30, 45],
+    "taucs_Pa": [0, 1000, 10000, 50000, 100000, 200000, 1000000],
+    "speeds_m_s": [0, 1e-8, 1e-7, 1e-6, 3.1689e-6, 1e-5, 1e-4],
+    "directions": ["(1,0)", "(0,1)", "(1,1)/sqrt2", "(1,-1)/sqrt2"],
+    "water_thickness_note": "W_till_max = hydrology.tillwat_max = 2 m; one negative value exercises the formula (hydrology normally keeps W >= 0); W > Wmax exercises the saturated regime"
+  },
+  "setup": {
+    "default_config": "mohr_coulomb (basal_yield_stress.model), all basal_yield_stress.* / basal_resistance.* config keys at their defaults",
+    "config_keys_that_matter": {
+      "hydrology.tillwat_max": 2.0,
+      "basal_yield_stress.mohr_coulomb.till_cohesion": 0.0,
+      "basal_yield_stress.mohr_coulomb.till_reference_effective_pressure": 1000.0,
+      "basal_yield_stress.mohr_coulomb.till_reference_void_ratio": 0.69,
+      "basal_yield_stress.mohr_coulomb.till_compressibility_coefficient": 0.12,
+      "basal_yield_stress.mohr_coulomb.till_effective_fraction_overburden": 0.02,
+      "basal_yield_stress.mohr_coulomb.till_phi_default": 30.0,
+      "basal_yield_stress.ice_free_bedrock": 1000000.0,
+      "basal_resistance.plastic.regularization": "0.01 m/yr",
+      "basal_resistance.pseudo_plastic.q": 0.25,
+      "basal_resistance.pseudo_plastic.u_threshold": "100 m/yr",
+      "basal_resistance.pseudo_plastic.sliding_scale_factor": -1.0
+    },
+    "tauc_map_forcing": {
+      "geometry": "test-F exact: bed = 0, sea level = 0, thickness = exactFG(t=0).H for r < 750 km, 0 outside",
+      "W_till": "W_till_max * (r/L)^2 (0 at the dome -> saturated 2 m at the margin)",
+      "phi": "20 + 10 cos(pi r/L) deg (30 at the dome -> 10 at the margin)",
+      "subglacial_water_thickness": 0,
+      "no_model_mask": "false everywhere",
+      "slippery_grounding_lines": false,
+      "add_transportable_water": false,
+      "delta": "config value 0.02 (no delta forcing file)"
+    }
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, component, grid, command line",
+    "parameters.csv": "basal_yield_stress.*, basal_resistance.*, hydrology.tillwat_max, constants.*, grid.* config keys",
+    "effective_pressure.csv": "delta, P_overburden, water_thickness -> N_interior (un-clamped), N_till = min(P, N_interior)",
+    "yield_stress.csv": "delta, P_overburden, water_thickness, phi_deg -> N_till, tauc = c0 + tan(phi) N_till",
+    "till_friction_angle.csv": "round trip: phi -> tauc -> phi_inverse (inverse of yield_stress, must be exact)",
+    "drag_plastic.csv": "tauc, vx, vy -> beta, dbeta, dbeta_fd (central difference w.r.t. alpha = 0.5|v|^2), |tau_b|",
+    "drag_pseudo_plastic.csv": "same for IceBasalResistancePseudoPlasticLaw",
+    "drag_regularized.csv": "same for IceBasalResistanceRegularizedLaw",
+    "inputs.nc": "test-F geometry + forcing (usurf, thk, topg, mask, sea_level, till_water_thickness, subglacial_water_thickness, no_model_mask, tillphi) + outputs (tauc, N_till)",
+    "tauc_map.csv": "per cell: geometry, W_till, phi, delta, P_overburden, N_till (recomputed), tauc"
+  },
+  "checks": {
+    "N_till_dry": "N_till(0.02, 1e7 Pa, W=0) = 1e7 Pa = P_overburden (min clamps the huge dry-till value)",
+    "N_till_saturated": "N_till(0.02, 1e7 Pa, W=Wmax) = 2e5 Pa = delta*P",
+    "N_till_Whalf": "N_till(0.02, 1e7 Pa, W=Wmax/2) = 1e7 Pa (still saturated at P=1e7; interior drops below P only for W >~ 1.4 m)",
+    "N_till_monotone": "N_till non-increasing in water_thickness over the whole sample grid",
+    "tauc_formula": "tauc(0.02, 1e7, 0, phi=30) = 5773502.691896257 Pa = tan(30 deg)*1e7 + c0; tauc(0.02, 1e7, 2, 30) = 115470.05383792515 Pa = tan(30 deg)*2e5",
+    "phi_roundtrip": "max |till_friction_angle(delta,P,W,yield_stress(delta,P,W,phi)) - phi| = 7.10543e-15 deg",
+    "plastic_drag": "beta(1e5, 0, 0) = 3.15569e14 Pa s m^-1 = tauc/eps (eps = plastic.regularization = 0.01 m/yr); beta(1e5, 1e-4 m/s, 0) = 1e9 Pa s m^-1 with |tau_b| = beta*|v| = 1e5 = tauc (plastic limit)",
+    "drag_derivative": "max |dbeta_fd - dbeta|/|dbeta| ~ 1e-10 for all three laws (drag_with_derivative consistent with the finite-difference derivative w.r.t. alpha = 0.5|v|^2)",
+    "drag_direction_invariance": "beta depends only on |v|: max beta spread across the 4 sampled directions ~ 1e-5 (round-off relative to beta)",
+    "tauc_map_ice_free": "ice-free cells all = basal_yield_stress.ice_free_bedrock = 1e6 Pa",
+    "tauc_map_grounded_range": "grounded tauc range [11850.4, 15462190.636559313] Pa: smallest at the margin (thin ice + saturated till), largest at the dome",
+    "tauc_map_dome": "dome center (H = 3000 m): P = N_till = 2.67813e7 Pa (W_till ~ 0), phi = 30 deg, tauc = 15462190.636559313 Pa = tan(30 deg) * N_till + c0"
+  }
+}

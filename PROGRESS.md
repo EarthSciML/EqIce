@@ -1,7 +1,7 @@
 # PROGRESS — eqice Stage 1 implementation
 
 Tracking progress on PLAN.md (Stage 1 — instrument the C++ codes). Last
-updated: 2026-09-30.
+updated: 2026-10-01.
 
 ## Milestone 1 — Confirm PISM source access + build; pick reference run configs ✅
 
@@ -64,18 +64,39 @@ updated: 2026-09-30.
 - Note: the first *integrated* (time-advancing) traces; the driver exposes the
   protected enthalpy state via a subclass to set the exact-T initial condition.
 
+## Milestone 3 (continued) — basal strength boundary instrumented ✅
+
+- **Basal strength traces** ✅ — new `instrument_basal_strength.cc`:
+  - pointwise `MohrCoulombPointwise` grids: `effective_pressure`
+    `(delta, P_overburden, W_till) -> N_till` (with the un-clamped interior
+    value), `yield_stress -> tauc = c0 + tan(phi) N_till`, and the
+    `till_friction_angle` inverse (round trip `phi -> tauc -> phi` exact to
+    7e-15 deg). Verified: `N_till(W=0) = P_overburden`, `N_till(W=Wmax) =
+    delta*P`, monotone non-increasing in `W`.
+  - basal resistance laws (`plastic`, `pseudo_plastic`, `regularized`):
+    `drag(tauc, vx, vy)` + `drag_with_derivative` over zero/slow/fast speeds;
+    `drag_with_derivative` agrees with finite differences to ~1e-10; plastic
+    limit `|tau_b| -> tauc` at high speed.
+  - a `MohrCoulombYieldStress` tauc map on the test-F exact geometry (flat
+    bed, Mx=My=31) with smooth prescribed `W_till(r)` and `phi(r)` fields:
+    ice-free `tauc = 1e6` (ice_free_bedrock), grounded range
+    [1.19e4, 1.55e7] Pa, dome-center `tauc = tan(30°)·P = 1.546e7`.
+- **Run config** ✅ — `stage1/runs/basal_strength.json` (sample grids, forcing
+  choice, check values).
+
 ## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`
 - [x] Step 2: instrument boundaries to dump inputs/outputs — **rheology + SIA +
-      SSA + energy + age done**; remaining: basal strength, hydrology, bed,
+      SSA + energy + age + basal strength done**; remaining: hydrology, bed,
       surface/ocean/calving, geometry
 - [x] Step 3 (partial): dump subassembly I/O — SSA `nuH`/`taud` (FD
-      subassemblies) and SIA `delta`/`D`/`q` chains are dumped; deeper
-      subassemblies (e.g. the assembled KSP matrix) are deferred
+      subassemblies), SIA `delta`/`D`/`q` chains, and the
+      `MohrCoulombPointwise`/basal-resistance-law pointwise functions are
+      dumped; deeper subassemblies (e.g. the assembled KSP matrix) are deferred
 - [x] Step 4: record run configurations → `stage1/runs/README.md` +
-      `stage1/runs/{rheology,sia,ssa,energy_age}.json`; dumps stored in
-      `stage1/dumps/`
+      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength}.json`; dumps
+      stored in `stage1/dumps/`
 - [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (not started)
@@ -110,6 +131,9 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
 - `stage1/dumps/energy/` + `stage1/dumps/age/` — 5 + 4 files, ~32 MB total
   (regenerate: `instrument/instrument_energy -Mx 31 -My 31 -Mz 61
   -dumps_dir stage1/dumps -dt_years 10`)
+- `stage1/dumps/basal_strength/` — 10 files, ~0.8 MB (regenerate:
+  `instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir
+  stage1/dumps/basal_strength`)
 - Full dumps are gitignored (`stage1/dumps/*`); `stage1/dumps/README.md`
   documents the layout and regeneration. Numeric test tuples extracted from
   these go into Stage-2 `.esm` `tests` blocks.
