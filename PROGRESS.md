@@ -45,17 +45,37 @@ updated: 2026-09-30.
 - **New C++ bug found** — `StressBalance::Inputs::dump()` writes an undefined
   NetCDF variable (bugs.md #4); worked around in the SIA driver.
 
+## Milestone 3 (partial) — energy + age boundaries instrumented ✅
+
+- **Energy traces** ✅ — new `instrument_energy.cc`: one `dt = 10 yr` step of
+  `EnthalpyModel` forced entirely by the test-F exact solution (u3/v3/w3, Σ,
+  T_s(r), Ggeo = 0.042). Initial state = exact steady-state temperature
+  (converted with the model's own standard `EnthalpyConverter`), so the
+  interior response is the discrete-vs-continuous gap (~2 J/kg/step); the top
+  ice level is pulled ~1 K toward the surface Dirichlet BC; where the exact T
+  exceeds T_pmp (deep dome interior) the model goes temperate and melts up to
+  0.0037 m/yr (57 temperate cells). Dumps in `stage1/dumps/energy/`.
+- **Age traces** ✅ — same driver: one `dt` step of `AgeModel` from age = 0
+  with the exact test-F velocity field. Deep-interior age = dt exactly (max
+  = dt), surface transition carried by the top coarse levels. Dumps in
+  `stage1/dumps/age/`.
+- **Run config** ✅ — `stage1/runs/energy_age.json` (grid, dt, forcing,
+  check values).
+- Note: the first *integrated* (time-advancing) traces; the driver exposes the
+  protected enthalpy state via a subclass to set the exact-T initial condition.
+
 ## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`
 - [x] Step 2: instrument boundaries to dump inputs/outputs — **rheology + SIA +
-      SSA done** (the three stress-balance boundaries; next: energy/age, basal,
-      hydrology, bed, surface/ocean/calving, geometry)
+      SSA + energy + age done**; remaining: basal strength, hydrology, bed,
+      surface/ocean/calving, geometry
 - [x] Step 3 (partial): dump subassembly I/O — SSA `nuH`/`taud` (FD
       subassemblies) and SIA `delta`/`D`/`q` chains are dumped; deeper
       subassemblies (e.g. the assembled KSP matrix) are deferred
 - [x] Step 4: record run configurations → `stage1/runs/README.md` +
-      `stage1/runs/{rheology,sia,ssa}.json`; dumps stored in `stage1/dumps/`
+      `stage1/runs/{rheology,sia,ssa,energy_age}.json`; dumps stored in
+      `stage1/dumps/`
 - [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (not started)
@@ -87,6 +107,9 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
   `instrument/instrument_sia -Mx 31 -My 31 -Mz 61`)
 - `stage1/dumps/ssa/` — 4 files, ~0.3 MB (regenerate:
   `instrument/instrument_ssa -Mx 61 -My 3`)
+- `stage1/dumps/energy/` + `stage1/dumps/age/` — 5 + 4 files, ~32 MB total
+  (regenerate: `instrument/instrument_energy -Mx 31 -My 31 -Mz 61
+  -dumps_dir stage1/dumps -dt_years 10`)
 - Full dumps are gitignored (`stage1/dumps/*`); `stage1/dumps/README.md`
   documents the layout and regeneration. Numeric test tuples extracted from
   these go into Stage-2 `.esm` `tests` blocks.

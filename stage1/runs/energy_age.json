@@ -1,0 +1,66 @@
+{
+  "component": "ice_energy + ice_age",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "integrated_trajectory",
+  "description": "One time step (dt = 10 years) of the enthalpy-based energy model (EnthalpyModel) and the ice-age model (AgeModel), both forced entirely by the verification test F exact solution: u3 = U(r,z) x/r, v3 = U(r,z) y/r, w3 = w(r,z), strain heating Sigma = Sig*rho*c, surface temperature T_s(r) = Tmin + ST*r, geothermal flux 0.042 W/m^2 (the Ggeo of the exact solution). The initial enthalpy is the exact steady-state temperature field (converted with the model's own standard EnthalpyConverter), so one step produces only the discrete-vs-continuous response; the age model starts from age = 0.",
+  "regenerate": {
+    "command": "cd stage1 && source runs/env.sh && instrument/instrument_energy -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps -dt_years 10",
+    "note": "Writes stage1/dumps/energy/ and stage1/dumps/age/. Override grid with -Mx/-My/-Mz, step with -dt_years, parent dir with -dumps_dir."
+  },
+  "domain": {
+    "Lx_m": 900000,
+    "Ly_m": 900000,
+    "Lz_m": 4000,
+    "vertical_spacing": "EQUAL",
+    "Mx": 31,
+    "My": 31,
+    "Mz": 61
+  },
+  "time": {
+    "dt_years": 10,
+    "dt_seconds": 315569259.7,
+    "steps": 1
+  },
+  "setup": {
+    "test_F": {
+      "L_m": 750000,
+      "H0_m": 3000,
+      "Tmin_K": 223.15,
+      "ST_K_per_m": 1.67e-5,
+      "Ggeo_W_per_m2": 0.042,
+      "note": "constants.ice.density (910), specific_heat_capacity (2009), thermal_conductivity (2.1) match the exact solution's rho/cpheat/k"
+    },
+    "energy_initial_state": "exact temperature field via EC->enthalpy_permissive(T_exact, 0, p), using the context's standard EnthalpyConverter (pressure-dependent T_m)",
+    "energy_forcing": {
+      "surface_temp": "T_s(r) = Tmin + ST*r",
+      "shelf_base_temp": "271.15 K (unused: no floating ice)",
+      "surface_liquid_fraction": 0,
+      "till_water_thickness": 0,
+      "basal_heat_flux": 0.042,
+      "basal_frictional_heating": 0,
+      "strain_heating": "Sig(r,z) * rho * c (exact)",
+      "u3_v3_w3": "exact test-F velocity field"
+    },
+    "age_initial_state": "age = 0 everywhere",
+    "age_forcing": "exact test-F u3/v3/w3"
+  },
+  "dump_files": {
+    "energy/meta.txt": "revision, config, grid, dt, command",
+    "energy/parameters.csv": "energy.*, constants.*, grid.*, enthalpy_converter.* config keys",
+    "energy/inputs.nc": "geometry, cell_type, all 9 forcing fields, E_in, E_out, basal_melt_rate",
+    "energy/columns.csv": "per (i,j,k): geometry, depth, surface_temp, u3/v3/w3/sigma, E_in, E_out, T_exact",
+    "energy/basal_melt_rate.csv": "per cell: basal melt rate",
+    "age/meta.txt": "revision, config, grid, dt, command",
+    "age/parameters.csv": "age.*, constants.*, grid.* config keys",
+    "age/inputs.nc": "thickness, u3/v3/w3, age_in, age_out",
+    "age/columns.csv": "per (i,j,k): geometry, u3/v3/w3, age_in, age_out"
+  },
+  "checks": {
+    "energy_near_steady": "deep-interior |E_out - E_in| ~ 2 J/kg (near the exact steady state); the top ice level is pulled ~1 K toward the surface Dirichlet BC (discrete-vs-continuum surface mismatch)",
+    "energy_temperate_base": "where T_exact > T_pmp (deep interior near the dome) the model clamps to temperate: 57 temperate cells, basal melt rate up to 0.0037 m/yr at the dome base",
+    "energy_ice_free": "E_in == E_out at ice-free margin cells (both set to the local surface-temperature enthalpy)",
+    "age_interior": "age = dt exactly in the deep interior (ice ages one second per second from age 0)",
+    "age_surface": "age = 0 at the surface; the age-0 layer advects down ~w*dt and the top ~2 coarse levels carry the surface transition",
+    "age_max": "max age after one step = dt"
+  }
+}

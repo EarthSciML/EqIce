@@ -17,8 +17,12 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 | `rheology/` | Flow laws, enthalpy converter, effective viscosity | `instrument/instrument_rheology.cc` | `runs/rheology.json` | `instrument/instrument_rheology` |
 | `sia/` | SIA stress balance (test-F exact state) | `instrument/instrument_sia.cc` | `runs/sia.json` | `instrument/instrument_sia -Mx 31 -My 31 -Mz 61` |
 | `ssa/` | SSA stress balance (test V / van der Veen shelf) | `instrument/instrument_ssa.cc` | `runs/ssa.json` | `instrument/instrument_ssa -Mx 61 -My 3` |
+| `energy/` | Ice energy (EnthalpyModel, one dt step, test-F forcing) | `instrument/instrument_energy.cc` | `runs/energy_age.json` | `instrument/instrument_energy -Mx 31 -My 31 -Mz 61` |
+| `age/` | Ice age (AgeModel, one dt step, test-F velocity) | `instrument/instrument_energy.cc` | `runs/energy_age.json` | (same driver; see `energy/`) |
 
-All drivers accept `-dumps_dir <path>` to redirect the output.
+The energy and age traces come from the same driver (they share the test-F
+state). All drivers accept `-dumps_dir <path>` to redirect the output; the
+energy/age driver writes `energy/` and `age/` under it and takes `-dt_years`.
 
 ## Regenerating
 
@@ -28,6 +32,7 @@ bash stage1/build/build_instrument.sh          # builds all drivers
 stage1/instrument/instrument_rheology -dumps_dir stage1/dumps/rheology
 stage1/instrument/instrument_sia -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps/sia
 stage1/instrument/instrument_ssa -Mx 61 -My 3 -dumps_dir stage1/dumps/ssa
+stage1/instrument/instrument_energy -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps -dt_years 10
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -52,9 +57,22 @@ component must reproduce.
   matches the exact solution to 0.077% average error at Mx=61 (Bbar = 1.9e8
   exactly, constant-flux relation u*H = V0*H0 verified). `ssa/inputs.nc` has
   all inputs + outputs including the FD subassemblies `nuH` and `taud`.
-- The test-F/V states mean every dumped quantity has an exact reference value;
-  the discrete-vs-exact differences are the expected discretization error of
-  the C++ model, which the `.esm` reimplementation must reproduce.
+- **Energy** (`energy/columns.csv`): per `(i,j,k)` the full forcing
+  `(surface_temp, u3, v3, w3, sigma)` and `(E_in, E_out)` for one dt step,
+  plus the exact reference temperature. The initial state is the exact
+  test-F steady-state temperature, so the interior response is tiny
+  (~2 J/kg/step); the top ice level is pulled ~1 K toward the surface
+  Dirichlet BC, and where the exact T exceeds the pressure-melting
+  temperature (deep dome interior) the model goes temperate and melts up to
+  0.0037 m/yr (`energy/basal_melt_rate.csv`).
+- **Age** (`age/columns.csv`): per `(i,j,k)` `(u3, v3, w3, age_in, age_out)`
+  for one dt step from age = 0. Deep-interior age = dt exactly (max = dt);
+  the top coarse levels carry the age-0 surface transition advected down by
+  w*dt.
+- The test-F/V states mean every dumped quantity has an exact reference value
+  (or a clean null state, as with age = 0); the discrete-vs-exact differences
+  are the expected discretization error of the C++ model, which the `.esm`
+  reimplementation must reproduce.
 
 ## Known C++ issue hit while dumping
 
