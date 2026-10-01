@@ -1,0 +1,78 @@
+{
+  "component": "hydrology (Routing / Shreve)",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "integrated_trajectory",
+  "description": "One update step (dt = 0.25 yr = 3 months) of hydrology::Routing (PISM's default hydrology.model = 'routing', Shreve q = -K grad psi) on the verification test-F exact geometry (flat bed, thickness = exact FG H, Mx=My=31, Lx=Ly=900 km). Prescribed deterministic forcing: constant surface input rate 0.2 m/yr water-equivalent (6.338e-6 kg m^-2 s^-1 in the model's units), dome-centered basal melt blob 0.1 m/yr * exp(-(r/200 km)^2), constant ice sliding speed 100 m/yr (a Hydrology Inputs contract member that Routing ignores -- it is only used by hydrology::Distributed; dumped for completeness). Initial state: dry till W_till = 0 everywhere (it absorbs the input over the step), and a dome-centered transportable-water blob W = 0.5 m * exp(-(r/150 km)^2) whose drainage drives the flux trace. All forcing and the geometry are radially symmetric, so the flux field is exactly centrally anti-symmetric.",
+  "regenerate": {
+    "command": "source stage1/runs/env.sh && stage1/instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir stage1/dumps/hydrology",
+    "note": "Run from the repo root. Override grid with -Mx/-My, step with -dt_years, output with -dumps_dir. Overwriting an existing inputs.nc makes the netCDF library leave an inputs.nc~ backup in the dumps directory (delete or ignore it)."
+  },
+  "domain": {
+    "Lx_m": 900000,
+    "Ly_m": 900000,
+    "registration": "CELL_CENTER",
+    "periodicity": "NOT_PERIODIC",
+    "Mx": 31,
+    "My": 31,
+    "dx_m": 58064.516129,
+    "cell_area_m2": 3371488033.3,
+    "note": "2-D grid only (no vertical levels needed for the basal boundary); exact test-F thickness, bed = 0, sea level = 0"
+  },
+  "time": {
+    "dt_years": 0.25,
+    "dt_seconds": 7889231.493675,
+    "internal_substeps": 19,
+    "substep_note": "19 internal substeps, average dt = 415223 s (~4.8 days); the substep is CFL-limited to ~435465 s (~5 days) by max_timestep_W_cfl(), dominated by the eps = 1e-6 regularization term in the denominator at these velocities (V/dx ~ 5e-8 << 1e-6). max_timestep_W_diff() gives dt_diff ~ 6.8e8 s (~21.5 yr), so the diffusion limit is not binding."
+  },
+  "setup": {
+    "default_config": "all hydrology.*, constants.*, grid.* keys at their defaults; hydrology.model explicitly set to 'routing'",
+    "test_F": {
+      "L_m": 750000,
+      "H0_m": 3000,
+      "note": "geometry.ice_free_thickness_standard at its default for the mask"
+    },
+    "config_keys_that_matter": {
+      "hydrology.model": "routing",
+      "hydrology.hydraulic_conductivity": 0.001,
+      "hydrology.thickness_power_in_flux": 1.25,
+      "hydrology.gradient_power_in_flux": 1.5,
+      "hydrology.add_water_input_to_till_storage": true,
+      "hydrology.tillwat_max": 2.0,
+      "hydrology.tillwat_decay_rate": "1 mm/yr",
+      "hydrology.maximum_time_step": "1 yr",
+      "hydrology.routing.include_floating_ice": false,
+      "constants.ice.density": 910.0,
+      "constants.fresh_water.density": 1000.0,
+      "constants.standard_gravity": 9.81
+    },
+    "forcing": {
+      "no_model_mask": "0 everywhere (whole domain modeled)",
+      "surface_input_rate": "0.2 m/yr water-equivalent, constant under ice; passed in the model's units (kg m^-2 s^-1) = 6.337753e-6 kg m^-2 s^-1 (= 0.2 m/yr * rho_w)",
+      "basal_melt_rate": "0.1 m/yr * exp(-(r/200 km)^2) in ice-equivalent m/s (peak 3.168876e-9 m/s at the dome)",
+      "ice_sliding_speed": "100 m/yr = 3.168876e-6 m/s, constant (ignored by Routing; part of the Inputs contract)",
+      "W_till_in": "0 everywhere (dry till; absorbs dt*(surface + basal) = up to 0.0725 m over the step, below tillwat_max = 2 m)",
+      "W_in": "0.5 m * exp(-(r/150 km)^2): dome-centered transportable-water blob (sum 10.483 m over the domain)"
+    },
+    "coupling_notes": "The dumped flux() is the *advective* flux q = V*W_upwind with V = -K grad R, R = P + rho_w g b. The diffusive part rho_w g K W grad W is applied separately inside the W update (W_change_due_to_flow) and is NOT part of the dumped flux. Effective pressure is NOT computed here -- it is downstream in MohrCoulombYieldStress (basal_strength boundary)."
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, component, description, dt, grid, cell_area, command line",
+    "parameters.csv": "hydrology.*, constants.*, grid.* config keys (values + units)",
+    "inputs.nc": "geometry (usurf, thk, topg, mask, sea_level), inputs (no_model_mask, surface_input_rate, basal_melt_rate, ice_sliding_speed + the model's converted water-input fields water_input_rate_from_surface/basal_melt in m/s), state in/out (W_till_in, tillwat, W_in, bwat), outputs (overburden_pressure, uwater_flux, vwater_flux)",
+    "columns.csv": "per cell: i,j,x,y,r,H,mask,surface_input_rate,basal_melt_rate,sliding_speed,surface_input_m_s,basal_melt_m_s,W_till_in,W_till_out,W_in,W_out,overburden_pressure,flux_u,flux_v",
+    "flux_law.csv": "pointwise Routing flux law: K = k W^(alpha-1) (G^2 + eps^2)^((beta-2)/2) (eps = 1 for beta < 2) and |q| = K W G sampled over W in [0,4] m and G = |grad R| in [0,1000] Pa/m -- the analytic .esm test target",
+    "staggered.csv": "internal subassembly fields from the last internal substep on the staggered (edge) grid: (i,j,o) with x/y coordinates, Wstag, Kstag, Vstag, Qstag, and the accumulated Qstag_average over the whole step"
+  },
+  "checks": {
+    "mass_balance_model": "sum(mass_change) = sum(input + flow + margin + grounding_line + conservation_error + no_model_mask) to round-off: residual = 0 kg",
+    "mass_balance_state": "independent recomputation dV - dt*(surf+basal volume) - flow - boundary corrections = -7.147e-4 m^3 (relative to dt*input volume 9.001e10 m^3: ~8e-15); boundary-correction volume = -5.414e6 m^3 (water that drained to the grounded ice margin)",
+    "w_till_bounds": "W_till in [0, 0.0725] m (non-negative everywhere; max = dt*(0.2 m/yr surface + 0.1 m/yr basal at dome) - decay)",
+    "w_bounds": "W in [0, 0.283302] m (initial blob 0.5 m drains to 0.1488 m at the dome; the max moves outward to r ~ 82 km)",
+    "overburden": "overburden_pressure = rho_ice*g*H exactly: max |P - rho_i g H| = 0 Pa over 517 grounded cells",
+    "flux_direction": "q . grad R <= 0 where R = P + rho_w g b (the potential the advection follows): max q.gradR = 0 over 516 grounded cells with |q| > 0; flux points radially outward from the dome (e.g. at cell (i,j) = (15,13), q = (0, -8.145e-4) m^2/s at x=0, y=-116 km)",
+    "flux_symmetry": "central anti-symmetry for the radially symmetric forcing: max |q(i,j) + q(Mx-1-i, My-1-j)| = 3.4286e-19 m^2 s^-1 (relative 4.2e-16)",
+    "max_flux": "max |q| = 8.145e-4 m^2 s^-1 = 70.37 m^2/day",
+    "substeps": "19 internal substeps, average dt = 415223 s (~4.8 days); dt_cfl = 435465 s (eps = 1e-6 CFL regularization dominates at V/dx ~ 5e-8), dt_diff = 6.793e8 s (~21.5 yr)",
+    "center_cell": "dome cell (15,15): H = 3000 m, W_in = 0.5 m, W_out = 0.1488 m, W_till_out = 0.0725 m, overburden = 2.67813e7 Pa, flux = 0 (radial symmetry)"
+  }
+}

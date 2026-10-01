@@ -20,6 +20,7 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 | `energy/` | Ice energy (EnthalpyModel, one dt step, test-F forcing) | `instrument/instrument_energy.cc` | `runs/energy_age.json` | `instrument/instrument_energy -Mx 31 -My 31 -Mz 61` |
 | `age/` | Ice age (AgeModel, one dt step, test-F velocity) | `instrument/instrument_energy.cc` | `runs/energy_age.json` | (same driver; see `energy/`) |
 | `basal_strength/` | Basal yield stress (Mohr-Coulomb) + basal resistance laws | `instrument/instrument_basal_strength.cc` | `runs/basal_strength.json` | `instrument/instrument_basal_strength -Mx 31 -My 31` |
+| `hydrology/` | Subglacial hydrology (Routing/Shreve, one dt step, test-F geometry) | `instrument/instrument_hydrology.cc` | `runs/hydrology.json` | `instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25` |
 
 The energy and age traces come from the same driver (they share the test-F
 state). All drivers accept `-dumps_dir <path>` to redirect the output; the
@@ -35,6 +36,7 @@ stage1/instrument/instrument_sia -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps/si
 stage1/instrument/instrument_ssa -Mx 61 -My 3 -dumps_dir stage1/dumps/ssa
 stage1/instrument/instrument_energy -Mx 31 -My 31 -Mz 61 -dumps_dir stage1/dumps -dt_years 10
 stage1/instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir stage1/dumps/basal_strength
+stage1/instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir stage1/dumps/hydrology
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -89,6 +91,35 @@ component must reproduce.
     `update_impl` path including the ice-free `tauc = 1e6` branch. The
     effective pressure field `N_till` is recomputed pointwise from the same
     inputs (the component does not store it).
+- **Hydrology** (`hydrology/`): one `dt = 0.25 yr` step of `hydrology::Routing`
+  (PISM's default hydrology model, Shreve `q = -K grad psi`) on the test-F
+  exact geometry, forced by a constant surface input rate (0.2 m/yr
+  water-equivalent), a dome-centered basal melt blob (0.1 m/yr peak), and a
+  constant sliding speed (ignored by Routing). State-in: dry till `W_till = 0`
+  and a dome-centered transportable-water blob `W = 0.5 m * exp(-(r/150km)^2)`.
+  - `hydrology/columns.csv`: per cell `(geometry, raw + converted inputs,
+    W_till_in/out, W_in/out, overburden_pressure, flux_u, flux_v)` — the full
+    I-boundary contract trace. The dome cell shows `W_till` growing 0 → 0.0725 m
+    (3 months of input absorbed by the till) and `W` draining 0.5 → 0.1488 m;
+    the flux is radially outward (e.g. `(15,13)` at `y = -116 km` has
+    `q = (0, -8.15e-4) m^2/s`).
+  - `hydrology/flux_law.csv`: the pointwise flux law
+    `K = k W^(alpha-1) (G^2 + eps^2)^((beta-2)/2)` (with the `eps = 1` for
+    `beta < 2` regularization from `compute_conductivity`) and
+    `|q| = K W G` over `(W, G = |grad R|)` grids — a pure `.esm` test target.
+  - `hydrology/staggered.csv`: the internal substep subassembly
+    (`Wstag, Kstag, Vstag, Qstag`, plus the accumulated `Qstag_average`) on the
+    edge-centered grid, for later factoring of the substep update.
+  - `hydrology/inputs.nc` has all inputs, state in/out, overburden pressure and
+    the flux components.
+  - Validation (see `runs/hydrology.json`): water-mass conservation closes to
+    round-off both in the model's own accounting (0 kg residual) and in an
+    independent state-based recomputation (~8e-15 relative); `W_till >= 0`;
+    `overburden = rho_ice g H` exactly; the advective flux satisfies
+    `q . grad R <= 0`; and the flux is centrally anti-symmetric to 1e-15
+    (radially symmetric forcing). Note the dumped flux is the *advective* flux
+    `V W_upwind`; the diffusive term `rho_w g K W grad W` is applied separately
+    inside the `W` update and is not part of `flux()`.
 - The test-F/V states mean every dumped quantity has an exact reference value
   (or a clean null state, as with age = 0); the discrete-vs-exact differences
   are the expected discretization error of the C++ model, which the `.esm`

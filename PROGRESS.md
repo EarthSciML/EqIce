@@ -84,19 +84,51 @@ updated: 2026-10-01.
 - **Run config** ✅ — `stage1/runs/basal_strength.json` (sample grids, forcing
   choice, check values).
 
+## Milestone 3 (continued) — hydrology boundary instrumented ✅
+
+- **Hydrology traces** ✅ — new `instrument_hydrology.cc`: one `dt = 0.25 yr`
+  step of `hydrology::Routing` (PISM's default `hydrology.model = "routing"`,
+  Shreve `q = -K grad psi`) on the test-F exact geometry (flat bed, Mx=My=31).
+  Prescribed forcing: constant surface input rate 0.2 m/yr water-equivalent,
+  dome-centered basal melt blob 0.1 m/yr `exp(-(r/200km)^2)`, constant sliding
+  speed 100 m/yr (part of the Hydrology Inputs contract but **ignored by
+  Routing** — only `Distributed` uses it; documented). State-in: dry till
+  `W_till = 0` and a dome-centered transportable-water blob
+  `W = 0.5 m exp(-(r/150km)^2)`.
+  - The model takes 19 internal substeps (CFL-limited to ~5 days by
+    `max_timestep_W_cfl()`, dominated by the `eps = 1e-6` regularization at
+    `V/dx ~ 5e-8`; `dt_diff ~ 21 yr` not binding).
+  - Validation: water-mass conservation closes to round-off both in the model's
+    own accounting (residual 0 kg) and in an independent state-based
+    recomputation (~8e-15 relative); `W_till` non-negative (max 0.0725 m =
+    3 months of input absorbed by the till); `overburden = rho_ice g H` exactly
+    (max error 0 Pa over 517 grounded cells); advective flux satisfies
+    `q . grad R <= 0` (max `q.gradR = 0`); flux centrally anti-symmetric to
+    4e-16 relative; max |q| = 8.15e-4 m²/s.
+  - Pointwise flux-law dump (`flux_law.csv`): `K = k W^(alpha-1) (G²+eps²)^((beta-2)/2)`
+    (with the beta<2 regularization) and `|q| = K W G` over `(W, G)` grids — an
+    analytic .esm test target. Staggered subassembly dump (`staggered.csv`):
+    `Wstag, Kstag, Vstag, Qstag` from the last internal substep.
+- **Run config** ✅ — `stage1/runs/hydrology.json` (grid, dt, forcing, checks).
+- `Distributed`, `SteadyState`/`EmptyingProblem`, `NullTransport` hydrology
+  models are **not** instrumented yet (deferred to a later pass; noted in
+  `stage1/boundaries.md` §7 and the hydrology README section).
+
 ## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`
 - [x] Step 2: instrument boundaries to dump inputs/outputs — **rheology + SIA +
-      SSA + energy + age + basal strength done**; remaining: hydrology, bed,
-      surface/ocean/calving, geometry
+      SSA + energy + age + basal strength + hydrology (Routing) done**;
+      remaining: Distributed/SteadyState hydrology, bed, surface/ocean/calving,
+      geometry
 - [x] Step 3 (partial): dump subassembly I/O — SSA `nuH`/`taud` (FD
-      subassemblies), SIA `delta`/`D`/`q` chains, and the
-      `MohrCoulombPointwise`/basal-resistance-law pointwise functions are
-      dumped; deeper subassemblies (e.g. the assembled KSP matrix) are deferred
+      subassemblies), SIA `delta`/`D`/`q` chains, the
+      `MohrCoulombPointwise`/basal-resistance-law pointwise functions, and the
+      Routing staggered `Wstag/Kstag/Vstag/Qstag` substep fields are dumped;
+      deeper subassemblies (e.g. the assembled KSP matrix) are deferred
 - [x] Step 4: record run configurations → `stage1/runs/README.md` +
-      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength}.json`; dumps
-      stored in `stage1/dumps/`
+      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology}.json`;
+      dumps stored in `stage1/dumps/`
 - [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (not started)
@@ -134,6 +166,9 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
 - `stage1/dumps/basal_strength/` — 10 files, ~0.8 MB (regenerate:
   `instrument/instrument_basal_strength -Mx 31 -My 31 -dumps_dir
   stage1/dumps/basal_strength`)
+- `stage1/dumps/hydrology/` — 6 files, ~1.2 MB (regenerate:
+  `instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir
+  stage1/dumps/hydrology`)
 - Full dumps are gitignored (`stage1/dumps/*`); `stage1/dumps/README.md`
   documents the layout and regeneration. Numeric test tuples extracted from
   these go into Stage-2 `.esm` `tests` blocks.

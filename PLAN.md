@@ -70,10 +70,11 @@ Purpose: produce authoritative input/output traces to build tests from.
 built in `stage1/build/`; reference run configs in `stage1/runs/README.md`;
 boundary catalog in `stage1/boundaries.md`). Milestone 2 complete — rheology,
 SIA, and SSA boundaries instrumented. Milestone 3 in progress — the energy,
-age, and basal-strength boundaries are now instrumented too (drivers in
-`stage1/instrument/`, dumps in `stage1/dumps/`, run configs in
-`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength}.json`). Next:
-hydrology, then bed. See `PROGRESS.md`.
+age, basal-strength, and hydrology (Routing) boundaries are now instrumented
+too (drivers in `stage1/instrument/`, dumps in `stage1/dumps/`, run configs in
+`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology}.json`).
+Next: the remaining hydrology models (Distributed/SteadyState), then bed. See
+`PROGRESS.md`.
 
 1. Identify discrete subassembly boundaries in the C++ codes matching the
    component inventory above. → **`stage1/boundaries.md`** (done).
@@ -161,10 +162,13 @@ whether the `.esm` reproduces or corrects it, and status.
 1. Confirm PISM source access + build; pick reference run configs. ✅
 2. Stage-1 instrumentation scaffolding + first component traces (rheology, SIA). ✅
 3. Stage-1: instrument remaining boundaries — SSA (`instrument_ssa.cc`, test V
-   / van der Veen), energy+age (`instrument_energy.cc`, test-F forcing), and
-   basal strength (`instrument_basal_strength.cc`, `MohrCoulombPointwise` +
-   basal resistance laws + `MohrCoulombYieldStress` tauc map) done; next
-   hydrology, bed, surface/ocean/calving, geometry.
+   / van der Veen), energy+age (`instrument_energy.cc`, test-F forcing), basal
+   strength (`instrument_basal_strength.cc`, `MohrCoulombPointwise` + basal
+   resistance laws + `MohrCoulombYieldStress` tauc map), and hydrology
+   (`instrument_hydrology.cc`, `hydrology::Routing` one-step trace + pointwise
+   flux law + staggered substep subassembly) done; next: the remaining
+   hydrology models (Distributed, SteadyState/EmptyingProblem, NullTransport
+   cross-check), bed, surface/ocean/calving, geometry.
 4. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
    bed → surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
