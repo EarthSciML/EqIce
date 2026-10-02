@@ -107,6 +107,35 @@ impact, whether the `.esm` reproduces or corrects it, and status.
   ocean-coupling component will reproduce the code (positive = melting).
 - **Status:** documented; candidate upstream comment fix.
 
+## 6. instrument_sia.cc dumps a `flow` column inconsistent with the authoritative delta/D chain at temperate columns
+
+- **Location:** `stage1/instrument/instrument_sia.cc` (~line 225 and 505–523):
+  the delta.csv `flow` column is computed with a **Cold** `EnthalpyConverter`
+  (`T_melting` set to ~1e6 K) instead of the model's standard converter.
+- **Description:** the SIA diffusivity chain `delta = e*theta*2*p*flow` depends
+  on the flow-law strain factor, which uses `T = EnthalpyConverter::temperature(E,p)`.
+  For a temperate column the standard converter returns the pressure melting
+  point `T_m(p) ≈ 271 K`, while the Cold converter returns ~1e6 K, giving a
+  materially different `flow` (and hence different `delta`) at temperate levels.
+  Concretely at the dome column (15,15,0), level k=0: the dumped `flow` is
+  `6.9503589963157444e-16` Pa⁻¹ s⁻¹ but the value consistent with the dumped
+  `delta` (and with the standard converter) is `6.0692719227331421e-16`
+  Pa⁻¹ s⁻¹ — a ~14.5% error. The dumped `delta` and `D` columns are
+  **authoritative** (they come from the SIAFD computation proper, whose flow
+  uses the standard converter): `2*p*flow_true == delta` to full precision, while
+  `2*p*flow_dump != delta`. Only temperate columns are affected; cold columns
+  (e.g. (20,15,0), (10,3,0)) dump a `flow` that matches the true value.
+- **Impact on results:** the `.esm` SIA diffusivity component reproduces the
+  *authoritative* chain (delta → I → D) using the standard `enthalpy_to_temperature`
+  template; its `flow` unknown matches the dumped delta column, not the buggy
+  dumped flow column. No `.esm` test asserts the buggy flow column.
+- **Reproduced/corrected in .esm:** corrected — `stage2/sia.esm`
+  `SIADiffusivityColumn.flow` uses the standard enthalpy converter
+  (`ice_rheology_templates.esm` `enthalpy_to_temperature`); tests assert
+  `delta`, `I`, `D`, `stress`, `pressure`, `T`.
+- **Status:** documented; candidate fix: replace the Cold converter in
+  `instrument_sia.cc` with the standard converter when dumping `flow`.
+
 ## 4. StressBalance::Inputs::dump() aborts: writes an undefined config variable
 
 - **Location:** `src/stressbalance/StressBalance.cc`

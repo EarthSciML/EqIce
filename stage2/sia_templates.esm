@@ -1,0 +1,71 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "sia_templates",
+    "description": "Expression-template library for the PISM shallow-ice-approximation (SIA) stress-balance component (stage 2 of the eqice project). Carries the SIA diffusivity chain: hydrostatic pressure p(depth), effective stress sigma = alpha*p, the Paterson-Budd cold ('arr') flow-law strain factor A*exp(-Q/(R*T))*sigma^(n-1) with the standard-enthalpy-converter temperature T(E,p), the delta integrand e*theta*2*p*flow, and the trapezoid-rule step used for the vertical integrals I(z) and D. Free names in template bodies (constants and parameters such as rho_ice, g, alpha, A_cold, ...) resolve against the importing model's declared parameters (esm-spec §9.6.1); templates referencing other templates (flow_power_law, arrhenius_softness, enthalpy_to_temperature) require the importing model to also import ./ice_rheology_templates.esm. Reference implementation: PISM v2.3.2 (stage1/pism/src/stressbalance/sia/SIAFD.cc)."
+  },
+  "expression_templates": {
+    "sia_pressure": {
+      "description": "Hydrostatic ice pressure p = rho_ice * g * depth below the ice surface (SIAFD::compute_diffusivity).",
+      "params": ["depth"],
+      "match": { "op": "sia_pressure", "args": ["depth"] },
+      "body": {
+        "op": "*",
+        "args": ["rho_ice", "g", "depth"]
+      }
+    },
+    "sia_effective_stress": {
+      "description": "SIA effective stress sigma = alpha * p, with alpha = |grad h| the surface-gradient magnitude (SIAFD::compute_diffusivity).",
+      "params": ["p"],
+      "match": { "op": "sia_effective_stress", "args": ["p"] },
+      "body": {
+        "op": "*",
+        "args": ["alpha", "p"]
+      }
+    },
+    "sia_flow_arr": {
+      "description": "Paterson-Budd cold ('arr') flow-law strain factor A*exp(-Q/(R*T))*sigma^(n-1) with T = EnthalpyConverter::temperature(E,p) (SIAFD flow_n for the 'arr' flow law; verified against the dumped delta/D chain).",
+      "params": ["E", "p", "sigma"],
+      "match": { "op": "sia_flow_arr", "args": ["E", "p", "sigma"] },
+      "body": {
+        "op": "flow_power_law",
+        "args": [
+          {
+            "op": "arrhenius_softness",
+            "args": [
+              "A_cold", "Q_cold",
+              {
+                "op": "enthalpy_to_temperature",
+                "args": ["E", "p"]
+              }
+            ]
+          },
+          "sigma",
+          "n"
+        ]
+      }
+    },
+    "sia_delta": {
+      "description": "SIA delta integrand delta = e_factor * theta * 2 * p * flow (SIAFD::compute_diffusivity).",
+      "params": ["p", "flow"],
+      "match": { "op": "sia_delta", "args": ["p", "flow"] },
+      "body": {
+        "op": "*",
+        "args": ["e_factor", "theta", 2.0, "p", "flow"]
+      }
+    },
+    "trapezoid_step": {
+      "description": "Trapezoid rule over one interval: 0.5 * (x_j - x_i) * (f_i + f_j). Used by the vertical integrals I(z) and D.",
+      "params": ["x_i", "x_j", "f_i", "f_j"],
+      "match": { "op": "trapezoid_step", "args": ["x_i", "x_j", "f_i", "f_j"] },
+      "body": {
+        "op": "*",
+        "args": [
+          0.5,
+          { "op": "-", "args": ["x_j", "x_i"] },
+          { "op": "+", "args": ["f_i", "f_j"] }
+        ]
+      }
+    }
+  }
+}

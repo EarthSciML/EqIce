@@ -1,7 +1,7 @@
 # PROGRESS — eqice implementation
 
 Tracking progress on PLAN.md (Stage 1 — instrument the C++ codes; Stage 2 —
-stubs → physics → EarthSciModels PRs). Last updated: 2026-10-01.
+stubs → physics → EarthSciModels PRs). Last updated: 2026-10-02.
 
 ## Milestone 1 — Confirm PISM source access + build; pick reference run configs ✅
 
@@ -431,6 +431,70 @@ dumps (`stage1/dumps/rheology/`).
   `T_pa`; gk `softness()` throws in C++ (dump NaN), so the gk model omits it
   and exposes `eps_disl/eps_diff/eps_gbs/eps_basal` instead. `bugs.md`
   unchanged.
+
+## Milestone 4 (continued) — Stage 2: SIA stress-balance component authored and passing ✅
+
+The second Stage-2 deliverable: the PISM shallow-ice-approximation (SIA)
+stress-balance boundary as a hand-authored, compositional `.esm` component
+built from the Stage-1 SIA dumps (`stage1/dumps/sia/`).
+
+- **Deliverable** ✅ — `stage2/sia.esm` (4 models: SIADiffusivityColumn,
+  SIADiffusiveFlux, SIA3DHorizontalVelocity, SIAVerticalVelocity) plus
+  `stage2/sia_templates.esm` (SIA expression-template library: `sia_pressure`,
+  `sia_effective_stress`, `sia_flow_arr`, `sia_delta`, `trapezoid_step`),
+  imported by reference per model together with
+  `./ice_rheology_templates.esm`.
+- **Physics** ✅ — matches the instrumented C++ v2.3.2 (`stage1/dumps/sia/`):
+  - vertical chain per level: `pressure = rho_ice*g*depth`,
+    `stress = alpha*p`, `flow = A_cold*exp(-Q_cold/(R*T))*stress^(n-1)` with
+    `T = enthalpy_to_temperature(E,p)` (the standard converter), and
+    `delta = e_factor*theta*2*p*flow` — verified bit-exact against the dumped
+    `delta` column (the authoritative one, see bugs.md #6);
+  - `I(z) = ∫_0^z delta ds` (cumulative trapezoid, prefix-reduction faq) and
+    `D = ∫_0^H depth*delta dz` (trapezoid with the partial top interval)
+    — verified to 1e-12 (dump bit-exact);
+  - diffusive flux `q = -D grad h` (o=0 → q_x, o=1 → q_y; the instrument's
+    diffusive_flux.csv pairs the two staggered components on one row, so the
+    `.esm` tests assert the per-point vector `-D*h_x, -D*h_y`);
+  - 3D horizontal velocity `U = sliding_velocity - 0.25 Σ_{e,w,n,s} I·∇h`
+    over the four staggered neighbors — reproduced bit-exact (max err 0.0);
+  - vertical velocity `w3` from incompressibility
+    `w[k] = w[k-1] - 0.5*dz*(div[k]+div[k-1])`, `w[0]=0` — reproduced to
+    4e-25 relative.
+- **Composition** ✅ — every shared calculation is an expression template in
+  `sia_templates.esm` / `ice_rheology_templates.esm`, imported by reference;
+  `sia_flow_arr` composes rheology templates (`flow_power_law`,
+  `arrhenius_softness`, `enthalpy_to_temperature`) inside its body. The
+  vertical integrals use the shared `trapezoid_step` template and faq
+  prefix-reduction / sum-with-filter forms. `theta` (bed smoothness) is an
+  input parameter; the BedSmoother is deferred to stage 3. No scripts
+  generated equations — only numeric arrays/tuples were extracted from the
+  dumps into the hand-authored `tests` blocks.
+- **Tests** ✅ — 48 assertions, passing under both the native and interpreter
+  compilers (`./esm test stage2/sia.esm` and `--compiler interpreter`):
+  3 diffusivity-column tests ((20,15,0), dome (15,15,0), margin (10,3,0))
+  covering D, delta, I, stress, pressure, T; 4 diffusive-flux tests; 1
+  3D-horizontal-velocity test at cell (20,16) (u3/v3 at 5 levels); 1
+  vertical-velocity test at (20,15) (w3 at 6 levels). Relative tolerances
+  1e-12.
+- **Verification** ✅ — `./esm validate` clean on both files; `./esm info`
+  lists the 4 models; `./esm units --check`: 8 consistent / 0 mismatched /
+  5 not checked (non-literal `^` exponent with parameter `n`, same
+  informational pattern as ice_rheology.esm); ice_rheology.esm regression
+  still 313/313.
+- **C++ bugs** — new entry in `bugs.md` #6: the instrumented delta.csv `flow`
+  column is computed with a **Cold** EnthalpyConverter (`T_melting` ~1e6 K),
+  inconsistent with the authoritative `delta`/`D` columns at temperate
+  columns (e.g. (15,15,0,k=0): dumped flow 6.950e-16 vs true 6.069e-16
+  Pa⁻¹ s⁻¹). The `.esm` reproduces the authoritative chain with the standard
+  converter.
+- **CLI learning** — matched expression templates auto-expand inside faq
+  bodies (proved via the exp6/7/8 and exp43/44 construction chain); a
+  hand-authored column model with `enthalpy_to_temperature` in a faq body
+  fails to compile unless the template library is actually imported via
+  `expression_template_imports` (the missing-import failure mode:
+  `unlowered_operator: rewrite-target operator 'enthalpy_to_temperature'
+  reached evaluation`).
 
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 

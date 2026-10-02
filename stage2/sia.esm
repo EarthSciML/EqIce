@@ -1,0 +1,948 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "sia",
+    "description": "PISM shallow-ice-approximation (SIA) stress-balance component (stage 2 of the eqice project): the vertical diffusivity chain (hydrostatic pressure, effective stress, Paterson-Budd cold flow factor, delta = e*theta*2*p*flow), the vertically-integrated flow velocity factor I(z), the diffusivity D, the diffusive flux q = -D grad h, the 3D horizontal velocity U(z) = sliding_velocity - 0.25*sum(I*grad h over the four staggered neighbors), and the vertical velocity w(z) from the incompressibility relation. All shared math is imported by reference from ./sia_templates.esm and ./ice_rheology_templates.esm. theta (bed smoothness) is an input; the BedSmoother is deferred to stage 3. Tests assert the instantaneous SIAFD outputs dumped by the instrumented PISM v2.3.2 run (stage1/dumps/sia/)."
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 61
+    }
+  },
+  "models": {
+    "SIADiffusivityColumn": {
+      "expression_template_imports": [
+        {
+          "ref": "./sia_templates.esm"
+        },
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "z": {
+          "type": "parameter",
+          "units": "m",
+          "shape": ["lev"],
+          "default": [0.0, 66.66666666666667, 133.33333333333334, 200.0, 266.6666666666667, 333.33333333333337, 400.0, 466.6666666666667, 533.3333333333334, 600.0, 666.6666666666667, 733.3333333333334, 800.0, 866.6666666666667, 933.3333333333334, 1000.0000000000001, 1066.6666666666667, 1133.3333333333335, 1200.0, 1266.6666666666667, 1333.3333333333335, 1400.0, 1466.6666666666667, 1533.3333333333335, 1600.0, 1666.6666666666667, 1733.3333333333335, 1800.0000000000002, 1866.6666666666667, 1933.3333333333335, 2000.0000000000002, 2066.666666666667, 2133.3333333333335, 2200.0, 2266.666666666667, 2333.3333333333335, 2400.0, 2466.666666666667, 2533.3333333333335, 2600.0, 2666.666666666667, 2733.3333333333335, 2800.0, 2866.666666666667, 2933.3333333333335, 3000.0, 3066.666666666667, 3133.3333333333335, 3200.0, 3266.666666666667, 3333.3333333333335, 3400.0000000000005, 3466.666666666667, 3533.3333333333335, 3600.0000000000005, 3666.666666666667, 3733.3333333333335, 3800.0000000000005, 3866.666666666667, 3933.3333333333335, 4000.0000000000005],
+          "description": "level heights (level k at index k+1)"
+        },
+        "thk": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2454.7418119333006,
+          "description": "ice thickness at the staggered point"
+        },
+        "ks": {
+          "type": "parameter",
+          "units": "1",
+          "default": 36.0,
+          "description": "top ice level index (0-based)"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "shape": ["lev"],
+          "default": [94164.0188116336, 91498.51415598279, 88859.07609257314, 86245.32411350089, 83656.88508099734, 81093.39304984597, 78554.4890949101, 76039.82114359864, 73549.04381310804, 71081.81825228073, 68637.81198792823, 66216.69877547336, 63818.15845376988, 61441.87680396375, 59087.54541226571, 56754.86153650997, 54443.52797637572, 52153.25294715693, 49883.7499569667, 47634.73768726697, 45405.93987662044, 43197.08520756334, 41007.90719650018, 38838.144086529384, 36687.538743107245, 34555.83855246317, 32442.795322682694, 30348.1651873762, 28271.708511855104, 26213.189801739365, 24172.37761392407, 22149.044469832726, 20142.96677089092, 18153.924716152687, 16181.702222016918, 14226.086843971898, 12521.543750100458, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "staggered-average ice enthalpy"
+        },
+        "alpha": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0024434328293442961,
+          "description": "surface-gradient magnitude |grad h| at the staggered point"
+        },
+        "theta": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "staggered-average bed-smoothness factor (BedSmoother output, deferred)"
+        },
+        "e_factor": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "enhancement factor"
+        },
+        "rho_ice": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density"
+        },
+        "g": {
+          "type": "parameter",
+          "units": "m/s^2",
+          "default": 9.81,
+          "description": "standard gravity"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "A_cold": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 3.61e-13,
+          "description": "Paterson-Budd cold softness prefactor (flow_law.arr.paterson_budd_cold.A_cold)"
+        },
+        "Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "Paterson-Budd cold activation energy (flow_law.arr.paterson_budd_cold.Q_cold)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "depth": {
+          "type": "unknown",
+          "units": "m",
+          "shape": ["lev"],
+          "description": "depth below the ice surface"
+        },
+        "pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "shape": ["lev"],
+          "description": "hydrostatic ice pressure at level"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "shape": ["lev"],
+          "description": "absolute ice temperature T(E,p) at level"
+        },
+        "stress": {
+          "type": "unknown",
+          "units": "Pa",
+          "shape": ["lev"],
+          "description": "effective stress alpha*p at level"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "shape": ["lev"],
+          "description": "flow-law strain factor A*sigma^(n-1) at level"
+        },
+        "delta": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "SIA delta integrand e*theta*2*p*flow at level"
+        },
+        "I": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "cumulative trapezoidal integral of delta from the bed"
+        },
+        "D": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "description": "SIA diffusivity (trapezoidal integral of depth*delta)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "depth below the surface, 0 above the ice",
+          "lhs": "depth",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "max",
+              "args": [
+                { "op": "-", "args": ["thk", { "op": "index", "args": ["z", "i"] }] },
+                0.0
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "hydrostatic pressure rho_ice*g*depth",
+          "lhs": "pressure",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sia_pressure",
+              "args": [ { "op": "index", "args": ["depth", "i"] } ]
+            }
+          }
+        },
+        {
+          "_comment": "standard enthalpy-converter temperature T(E,p)",
+          "lhs": "T",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "enthalpy_to_temperature",
+              "args": [
+                { "op": "index", "args": ["E", "i"] },
+                { "op": "index", "args": ["pressure", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "effective stress alpha*p",
+          "lhs": "stress",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sia_effective_stress",
+              "args": [ { "op": "index", "args": ["pressure", "i"] } ]
+            }
+          }
+        },
+        {
+          "_comment": "Paterson-Budd cold flow factor A*exp(-Q/(R*T))*sigma^(n-1)",
+          "lhs": "flow",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sia_flow_arr",
+              "args": [
+                { "op": "index", "args": ["E", "i"] },
+                { "op": "index", "args": ["pressure", "i"] },
+                { "op": "index", "args": ["stress", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "delta = e_factor*theta*2*p*flow",
+          "lhs": "delta",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sia_delta",
+              "args": [
+                { "op": "index", "args": ["pressure", "i"] },
+                { "op": "index", "args": ["flow", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "I(z) = integral of delta from the bed (cumulative trapezoid, prefix reduction)",
+          "lhs": "I",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": {
+              "i": { "from": "lev" },
+              "j": [1, 60]
+            },
+            "filter": { "op": "<", "args": ["j", "i"] },
+            "expr": {
+              "op": "trapezoid_step",
+              "args": [
+                { "op": "index", "args": ["z", "j"] },
+                { "op": "index", "args": ["z", { "op": "+", "args": ["j", 1] }] },
+                { "op": "index", "args": ["delta", "j"] },
+                { "op": "index", "args": ["delta", { "op": "+", "args": ["j", 1] }] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "D = integral of depth*delta up to the surface (trapezoid with partial top interval)",
+          "lhs": "D",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": { "i": [1, 60] },
+            "filter": { "op": "<=", "args": ["i", "ks"] },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "trapezoid_step",
+                  "args": [
+                    { "op": "index", "args": ["z", "i"] },
+                    { "op": "index", "args": ["z", { "op": "+", "args": ["i", 1] }] },
+                    {
+                      "op": "*",
+                      "args": [
+                        { "op": "index", "args": ["depth", "i"] },
+                        { "op": "index", "args": ["delta", "i"] }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        { "op": "index", "args": ["depth", { "op": "+", "args": ["i", 1] }] },
+                        { "op": "index", "args": ["delta", { "op": "+", "args": ["i", 1] }] }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "ifelse",
+                  "args": [
+                    { "op": "==", "args": ["i", "ks"] },
+                    {
+                      "op": "*",
+                      "args": [
+                        0.5,
+                        { "op": "^", "args": [
+                          { "op": "index", "args": ["depth", { "op": "+", "args": ["i", 1] }] },
+                          2
+                        ] },
+                        { "op": "index", "args": ["delta", { "op": "+", "args": ["i", 1] }] }
+                      ]
+                    },
+                    0.0
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "mid_column_20_15_0",
+          "description": "SIA diffusivity chain at the mid-radius i-offset staggered point (20,15,0), ks=36, theta=1 (stage1/dumps/sia/delta.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            {
+              "variable": "D", "time": 0.0, "expected": 0.07252998074412019,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "delta", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 1.1221441657957646e-07, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "delta", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 9.054467374170494e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "delta", "time": 0.0, "coords": { "lev": 37 },
+              "expected": 1.0932263438616581e-14, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "I", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 6.758636344042714e-06, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "I", "time": 0.0, "coords": { "lev": 37 },
+              "expected": 3.3286207284282627e-05, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "stress", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 53544.716615898986, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "pressure", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 21913725.62930977, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "T", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 270.02108950305308, "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "dome_column_15_15_0",
+          "description": "SIA diffusivity chain at the dome i-offset staggered point (15,15,0), ks=44, theta=1 (stage1/dumps/sia/delta.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "thk": 2972.8966569865406,
+            "ks": 44.0,
+            "E": [99024.68404148027, 96359.06301832113, 93719.28037424426, 91104.96223659135, 88515.74191116389, 85951.25971076163, 83411.16278861053, 80895.10497652087, 78402.74662761856, 75933.75446349953, 73487.8014256627, 71064.56653108328, 68663.73473179148, 66284.99677832746, 63928.049086949424, 61592.59361047429, 59278.337712634966, 56984.99404584436, 54712.28043225806, 52459.91974803189, 50227.63981067558, 48015.17326940611, 45822.25749840708, 43648.63449290603, 41494.05076798244, 39358.25726002269, 37241.00923074293, 35142.06617370072, 33061.19172322121, 30998.153565665096, 28952.7233529691, 26924.676618389887, 24913.792694387987, 22919.85463258739, 20942.649125749806, 18981.966431705572, 17037.600299183563, 15109.347895484852, 13197.009735947213, 11300.389615149354, 9419.294539803866, 7553.5346632916935, 5702.923221791631, 3867.2764719582774, 2046.4136301067206, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "alpha": 0.00093355873971089065,
+            "theta": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "D", "time": 0.0, "expected": 0.031492472244910474,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "delta", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 3.2214901197490568e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "delta", "time": 0.0, "coords": { "lev": 45 },
+              "expected": 2.8981284480737378e-16, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "I", "time": 0.0, "coords": { "lev": 45 },
+              "expected": 1.1827227088802897e-05, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "stress", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 24776.038167933057, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "pressure", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 26539345.74658455, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "T", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 271.05339168601978, "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "margin_column_10_3_0",
+          "description": "SIA diffusivity chain at the margin i-offset staggered point (10,3,0), ks=3, theta=0.5 (stage1/dumps/sia/delta.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "thk": 249.74218787011,
+            "ks": 3.0,
+            "E": [21962.289085466648, 20630.20477921812, 19312.462433029443, 18008.83166682996, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "alpha": 0.01194791086607434,
+            "theta": 0.5
+          },
+          "assertions": [
+            {
+              "variable": "D", "time": 0.0, "expected": 3.1289583238432465e-07,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "delta", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 2.3338144405612048e-11, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "delta", "time": 0.0, "coords": { "lev": 4 },
+              "expected": 1.4198937008732431e-13, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "I", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 1.0586934213429465e-09, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "I", "time": 0.0, "coords": { "lev": 4 },
+              "expected": 1.4764906076410364e-09, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "stress", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 26637.550481061775, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "pressure", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 2229473.4853352592, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "T", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 234.08195076429399, "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        }
+      ]
+    },
+    "SIADiffusiveFlux": {
+      "expression_template_imports": [
+        {
+          "ref": "./sia_templates.esm"
+        }
+      ],
+      "variables": {
+        "D": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 0.07252998074412019,
+          "description": "SIA diffusivity at the staggered point"
+        },
+        "h_x": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.0024434328293442961,
+          "description": "x-component of the surface gradient at the staggered point"
+        },
+        "h_y": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "y-component of the surface gradient at the staggered point"
+        },
+        "q_x": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "description": "x-component of the diffusive flux q = -D grad h"
+        },
+        "q_y": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "description": "y-component of the diffusive flux q = -D grad h"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "q_x = -D h_x (SIAFD::compute_diffusive_flux, o=0)",
+          "lhs": "q_x",
+          "rhs": {
+            "op": "-",
+            "args": [
+              { "op": "*", "args": ["D", "h_x"] }
+            ]
+          }
+        },
+        {
+          "_comment": "q_y = -D h_y (SIAFD::compute_diffusive_flux, o=1)",
+          "lhs": "q_y",
+          "rhs": {
+            "op": "-",
+            "args": [
+              { "op": "*", "args": ["D", "h_y"] }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "flux_20_15_0",
+          "description": "Diffusive flux at the i-offset staggered point (20,15,0): q_x = -D*h_x reproduces the dumped q(i,j,0) exactly; q_y = -D*h_y = 0 (h_y = 0 on the symmetry axis) (stage1/dumps/sia/diffusive_flux.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            {
+              "variable": "q_x", "time": 0.0, "expected": 0.00017722213606189292,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "q_y", "time": 0.0, "expected": 0.0,
+              "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "flux_20_15_1",
+          "description": "Diffusive flux at the j-offset staggered point (20,15,1): q_y = -D*h_y reproduces the dumped q(i,j,1) exactly; q_x = -D*h_x (stage1/dumps/sia/diffusive_flux.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "D": 0.077010571273373254,
+            "h_x": -0.002304472666031095,
+            "h_y": -0.00023008990471935046
+          },
+          "assertions": [
+            {
+              "variable": "q_x", "time": 0.0, "expected": 0.00017746875649492813,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "q_y", "time": 0.0, "expected": 1.7719355006673199e-05,
+              "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "flux_10_3_0",
+          "description": "Diffusive flux at the margin i-offset staggered point (10,3,0): q_x = -D*h_x reproduces the dumped q(i,j,0) exactly; q_y = -D*h_y (stage1/dumps/sia/diffusive_flux.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "D": 3.1289583238432465e-07,
+            "h_x": 0.0086022309155260115,
+            "h_y": 0.008291815081128244
+          },
+          "assertions": [
+            {
+              "variable": "q_x", "time": 0.0, "expected": -2.6916022026756823e-09,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "q_y", "time": 0.0, "expected": -2.5944743817865183e-09,
+              "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "flux_10_3_1",
+          "description": "Diffusive flux at the margin j-offset staggered point (10,3,1): q_y = -D*h_y reproduces the dumped q(i,j,1) exactly; q_x = -D*h_x (stage1/dumps/sia/diffusive_flux.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "D": 1.1774816947984546e-05,
+            "h_x": 0.004093930473672033,
+            "h_y": 0.015070753429569017
+          },
+          "assertions": [
+            {
+              "variable": "q_x", "time": 0.0, "expected": -4.8205281925263852e-08,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "q_y", "time": 0.0, "expected": -1.7745536290138548e-07,
+              "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        }
+      ]
+    },
+    "SIA3DHorizontalVelocity": {
+      "expression_template_imports": [
+        {
+          "ref": "./sia_templates.esm"
+        }
+      ],
+      "variables": {
+        "sliding_velocity_u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "basal (sliding) velocity x-component from the underlying stress balance"
+        },
+        "sliding_velocity_v": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "basal (sliding) velocity y-component from the underlying stress balance"
+        },
+        "I_e": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 6.7169482225434706e-06, 1.2128149537962968e-05, 1.6476878450521176e-05, 1.996278251845159e-05, 2.2749447387153063e-05, 2.4970687867109426e-05, 2.6735774214324558e-05, 2.813376917966675e-05, 2.9237123094522485e-05, 3.0104650433612032e-05, 3.0783991246937186e-05, 3.131364399314765e-05, 3.172464213792159e-05, 3.204193498165669e-05, 3.228552319424842e-05, 3.247139115949228e-05, 3.26122712129071e-05, 3.271826897934244e-05, 3.279737409894211e-05, 3.2855876518609616e-05, 3.2898705091805745e-05, 3.2929702363365353e-05, 3.29518470262925e-05, 3.296743354693664e-05, 3.2978216798585664e-05, 3.2985528166701296e-05, 3.299036844586706e-05, 3.29934819004815e-05, 3.2995415075976064e-05, 3.299656329776195e-05, 3.299720725850621e-05, 3.2997541651697333e-05, 3.2997697444889354e-05, 3.299775908622829e-05, 3.299777769177752e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05, 3.299778106415904e-05],
+          "description": "I(z) column at the east staggered neighbor (i,j,0)"
+        },
+        "I_w": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 6.985715593342611e-06, 1.264392727017577e-05, 1.7216962518346546e-05, 2.0904480427370834e-05, 2.3870749572491953e-05, 2.6250718480003344e-05, 2.8155074213102996e-05, 2.9674453608406463e-05, 3.088294551224099e-05, 3.1841000273233824e-05, 3.259784411549434e-05, 3.31934803119463e-05, 3.366034584803172e-05, 3.402468112877459e-05, 3.4307660912190856e-05, 3.4526326774038385e-05, 3.469435478986507e-05, 3.482268656297737e-05, 3.4920047064441846e-05, 3.499336884244348e-05, 3.5048138884004083e-05, 3.508868167148085e-05, 3.511838968437693e-05, 3.513991068204878e-05, 3.515529950437989e-05, 3.516614079441198e-05, 3.517364793633251e-05, 3.5178742577959275e-05, 3.518211833852913e-05, 3.518429166462741e-05, 3.518564226801621e-05, 3.518644514091126e-05, 3.518689578180345e-05, 3.5187129965555543e-05, 3.518723914461938e-05, 3.51872823649412e-05, 3.518729541303459e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05, 3.5187297775954977e-05],
+          "description": "I(z) column at the west staggered neighbor (i-1,j,0)"
+        },
+        "I_n": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 6.8459561231400615e-06, 1.2372948539283703e-05, 1.6824738990981784e-05, 2.040169077109279e-05, 2.3268245083115144e-05, 2.555914584004159e-05, 2.7384617264842288e-05, 2.8834665999963327e-05, 2.9982651898180665e-05, 3.088824846296651e-05, 3.159989436345665e-05, 3.215682099944924e-05, 3.2590727254612114e-05, 3.29271609438577e-05, 3.3186656688808966e-05, 3.3385671751630544e-05, 3.3537354475450574e-05, 3.365217421053362e-05, 3.3738436773020415e-05, 3.380270543857568e-05, 3.385014409104764e-05, 3.3884796320261735e-05, 3.390981190399646e-05, 3.3927630141735946e-05, 3.3940127868564326e-05, 3.394873861321028e-05, 3.395454822989691e-05, 3.395837139159213e-05, 3.396081255081752e-05, 3.3962314326778796e-05, 3.396319574193867e-05, 3.3963682288583934e-05, 3.396392944080437e-05, 3.396404092651743e-05, 3.3964082826804404e-05, 3.396409436673866e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05, 3.396409609546612e-05],
+          "description": "I(z) column at the north staggered neighbor (i,j,1)"
+        },
+        "I_s": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 6.898501442944259e-06, 1.247389946323052e-05, 1.6969730111951928e-05, 2.0586328790359243e-05, 2.3488248178867562e-05, 2.5810438073388297e-05, 2.7663388742829332e-05, 2.913740728631104e-05, 3.0306169360563586e-05, 3.1229665793425405e-05, 3.195664434204045e-05, 3.252663063772167e-05, 3.297159871179083e-05, 3.3317350018356705e-05, 3.358465022249209e-05, 3.379016491910832e-05, 3.3947228646593716e-05, 3.406647585497491e-05, 3.415635770769324e-05, 3.422356459266464e-05, 3.427337086849313e-05, 3.430991557120887e-05, 3.433643046770619e-05, 3.435542488998638e-05, 3.436883515686994e-05, 3.437814503441635e-05, 3.4384482558602426e-05, 3.4388697606635087e-05, 3.4391423825328745e-05, 3.4393127879993644e-05, 3.4394148453219284e-05, 3.439472698131739e-05, 3.439503175153023e-05, 3.43951766824539e-05, 3.439523586263489e-05, 3.439525471891491e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05, 3.43952585192647e-05],
+          "description": "I(z) column at the south staggered neighbor (i,j-1,1)"
+        },
+        "h_x_e": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.0024279554492825208,
+          "description": "surface-gradient x-component at the east staggered neighbor"
+        },
+        "h_x_w": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.0021603511380495735,
+          "description": "surface-gradient x-component at the west staggered neighbor"
+        },
+        "h_x_n": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.0022674003567117614,
+          "description": "surface-gradient x-component at the north staggered neighbor"
+        },
+        "h_x_s": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.002304472666031095,
+          "description": "surface-gradient x-component at the south staggered neighbor"
+        },
+        "h_y_e": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.00044061060208960097,
+          "description": "surface-gradient y-component at the east staggered neighbor"
+        },
+        "h_y_w": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.00047768291140893454,
+          "description": "surface-gradient y-component at the west staggered neighbor"
+        },
+        "h_y_n": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.0006792289547946644,
+          "description": "surface-gradient y-component at the north staggered neighbor"
+        },
+        "h_y_s": {
+          "type": "parameter",
+          "units": "1",
+          "default": -0.00023008990471935046,
+          "description": "surface-gradient y-component at the south staggered neighbor"
+        },
+        "u3": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "3D horizontal ice velocity x-component"
+        },
+        "v3": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "3D horizontal ice velocity y-component"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "u3[k] = sliding_u - 0.25*(I_e*h_x_e + I_w*h_x_w + I_n*h_x_n + I_s*h_x_s) (SIAFD::compute_3d_horizontal_velocity)",
+          "lhs": "u3",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "-",
+              "args": [
+                "sliding_velocity_u",
+                {
+                  "op": "*",
+                  "args": [
+                    0.25,
+                    {
+                      "op": "+",
+                      "args": [
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_e", "i"] }, "h_x_e" ] },
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_w", "i"] }, "h_x_w" ] },
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_n", "i"] }, "h_x_n" ] },
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_s", "i"] }, "h_x_s" ] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "v3[k] = sliding_v - 0.25*(I_e*h_y_e + I_w*h_y_w + I_n*h_y_n + I_s*h_y_s) (SIAFD::compute_3d_horizontal_velocity)",
+          "lhs": "v3",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "-",
+              "args": [
+                "sliding_velocity_v",
+                {
+                  "op": "*",
+                  "args": [
+                    0.25,
+                    {
+                      "op": "+",
+                      "args": [
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_e", "i"] }, "h_y_e" ] },
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_w", "i"] }, "h_y_w" ] },
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_n", "i"] }, "h_y_n" ] },
+                        { "op": "*", "args": [
+                          { "op": "index", "args": ["I_s", "i"] }, "h_y_s" ] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "velocity_cell_20_16",
+          "description": "3D horizontal velocity at cell center (20,16) from the four staggered-neighbor I(z) columns and surface gradients (stage1/dumps/sia/columns.csv and delta.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 0.0, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 1.5704995259780818e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 11 },
+              "expected": 7.0971107004829529e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 21 },
+              "expected": 7.7720526036116862e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 36 },
+              "expected": 7.810174517397102e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "v3", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 0.0, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "v3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 3.1334406813115367e-09, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "v3", "time": 0.0, "coords": { "lev": 11 },
+              "expected": 1.4160038352926708e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "v3", "time": 0.0, "coords": { "lev": 21 },
+              "expected": 1.550666371106742e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "v3", "time": 0.0, "coords": { "lev": 36 },
+              "expected": 1.558272463922003e-08, "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        }
+      ]
+    },
+    "SIAVerticalVelocity": {
+      "expression_template_imports": [
+        {
+          "ref": "./sia_templates.esm"
+        }
+      ],
+      "variables": {
+        "z": {
+          "type": "parameter",
+          "units": "m",
+          "shape": ["lev"],
+          "default": [0.0, 66.66666666666667, 133.33333333333334, 200.0, 266.6666666666667, 333.33333333333337, 400.0, 466.6666666666667, 533.3333333333334, 600.0, 666.6666666666667, 733.3333333333334, 800.0, 866.6666666666667, 933.3333333333334, 1000.0000000000001, 1066.6666666666667, 1133.3333333333335, 1200.0, 1266.6666666666667, 1333.3333333333335, 1400.0, 1466.6666666666667, 1533.3333333333335, 1600.0, 1666.6666666666667, 1733.3333333333335, 1800.0000000000002, 1866.6666666666667, 1933.3333333333335, 2000.0000000000002, 2066.666666666667, 2133.3333333333335, 2200.0, 2266.666666666667, 2333.3333333333335, 2400.0, 2466.666666666667, 2533.3333333333335, 2600.0, 2666.666666666667, 2733.3333333333335, 2800.0, 2866.666666666667, 2933.3333333333335, 3000.0, 3066.666666666667, 3133.3333333333335, 3200.0, 3266.666666666667, 3333.3333333333335, 3400.0000000000005, 3466.666666666667, 3533.3333333333335, 3600.0000000000005, 3666.666666666667, 3733.3333333333335, 3800.0000000000005, 3866.666666666667, 3933.3333333333335, 4000.0000000000005],
+          "description": "level heights (level k at index k+1)"
+        },
+        "div": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": ["lev"],
+          "default": [0.0, 7.673906500753938e-14, 1.3677838112591314e-13, 1.8417963655226427e-13, 2.21458250877654e-13, 2.506529496187002e-13, 2.734123693767554e-13, 2.9106648420778373e-13, 3.046854333990845e-13, 3.1512790354555893e-13, 3.230808597125248e-13, 3.290921205731118e-13, 3.3359702144156514e-13, 3.369401992673207e-13, 3.3939335831480245e-13, 3.4116972887535737e-13, 3.424358092628204e-13, 3.4332087959627673e-13, 3.4392469116168436e-13, 3.443236646850694e-13, 3.4457587230612223e-13, 3.4472502944961635e-13, 3.4480368250666603e-13, 3.4483574487814313e-13, 3.448385063422914e-13, 3.4482421791977587e-13, 3.4480133561245747e-13, 3.447754909104479e-13, 3.447502432304628e-13, 3.4472765899570007e-13, 3.447087535005358e-13, 3.446938246949845e-13, 3.446827023019389e-13, 3.4467493101845794e-13, 3.44669902803755e-13, 3.4466694931306153e-13, 3.446654180965307e-13, 3.446647464178382e-13, 3.446645142597515e-13, 3.4466445887061937e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13, 3.4466445218254817e-13],
+          "description": "horizontal divergence du/dx + dv/dy at each level"
+        },
+        "w3": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "vertical velocity relative to the bed, w[0] = 0, w[k] = w[k-1] - 0.5*dz*(div[k]+div[k-1])"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "w3 from incompressibility: cumulative trapezoid of -div (StressBalance::compute_vertical_velocity)",
+          "lhs": "w3",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "reduce": "+",
+            "ranges": {
+              "i": { "from": "lev" },
+              "j": [1, 60]
+            },
+            "filter": { "op": "<", "args": ["j", "i"] },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "trapezoid_step",
+                  "args": [
+                    { "op": "index", "args": ["z", "j"] },
+                    { "op": "index", "args": ["z", { "op": "+", "args": ["j", 1] }] },
+                    { "op": "index", "args": ["div", "j"] },
+                    { "op": "index", "args": ["div", { "op": "+", "args": ["j", 1] }] }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "vertical_velocity_cell_20_15",
+          "description": "Vertical velocity at cell center (20,15) from the dumped divergence profile (stage1/dumps/sia/columns.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 1 },
+              "expected": 0.0, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": -2.557968833584646e-12, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 11 },
+              "expected": -1.4770939357116773e-10, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 21 },
+              "expected": -3.735777828503232e-10, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 36 },
+              "expected": -7.1832001184864496e-10, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 61 },
+              "expected": -1.2927609373182127e-09, "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

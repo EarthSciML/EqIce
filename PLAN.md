@@ -220,8 +220,11 @@ whether the `.esm` reproduces or corrects it, and status.
    SteadyState/EmptyingProblem, NullTransport cross-check) and the
    LingleClark / Given bed models.
 4. Stage-2: rheology ✅ (first leaf component, `stage2/ice_rheology.esm`,
-   313/313 tests passing) → stress balance (SIA, SSA) → energy →
-   basal/hydrology → bed → surface/ocean/calving → subassemblies.
+   313/313 tests passing) → stress balance: SIA ✅ (`stage2/sia.esm` +
+   `stage2/sia_templates.esm`, 48/48 tests passing: diffusivity column chain,
+   diffusive flux, 3D horizontal velocity, vertical velocity; rheology
+   regression still 313/313) → SSA → energy → basal/hydrology → bed →
+   surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 
