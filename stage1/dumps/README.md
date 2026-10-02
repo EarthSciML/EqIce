@@ -24,6 +24,7 @@ numeric tuples that Stage-2 `.esm` tests actually use are committed inside the
 | `bed/` | Bed deformation (PointwiseIsostasy, two update intervals, test-F load history) | `instrument/instrument_bed.cc` | `runs/bed.json` | `instrument/instrument_bed -Mx 31 -My 31` |
 | `calving/` | Calving (Eigen / von Mises / Hayhurst / thickness / float-kill) + frontal melt (physics kernels + Constant) on the van der Veen CFBC shelf | `instrument/instrument_calving.cc` | `runs/calving.json` | `instrument/instrument_calving -Mx 65 -My 65` |
 | `surface_ocean/` | Atmosphere + ocean + surface forcing boundaries (PIK atmosphere, PIK / Beckmann–Goosse ocean + Constant cross-check, PIK surface) | `instrument/instrument_surface_ocean.cc` | `runs/surface_ocean.json` | `instrument/instrument_surface_ocean -Mx 31 -My 31` |
+| `geometry/` | Ice geometry update (GeometryEvolution `flow_step` + `source_term_step`, one dt step each on the test-F exact geometry) + pointwise `part_grid_threshold_thickness` | `instrument/instrument_geometry.cc` | `runs/geometry.json` | `instrument/instrument_geometry -Mx 31 -My 31 -dt_years 1` |
 
 The energy and age traces come from the same driver (they share the test-F
 state). All drivers accept `-dumps_dir <path>` to redirect the output; the
@@ -43,6 +44,7 @@ stage1/instrument/instrument_hydrology -Mx 31 -My 31 -dt_years 0.25 -dumps_dir s
 stage1/instrument/instrument_bed -Mx 31 -My 31 -dumps_dir stage1/dumps/bed
 stage1/instrument/instrument_calving -Mx 65 -My 65 -dumps_dir stage1/dumps/calving
 stage1/instrument/instrument_surface_ocean -Mx 31 -My 31 -dumps_dir stage1/dumps/surface_ocean
+stage1/instrument/instrument_geometry -Mx 31 -My 31 -dt_years 1 -dumps_dir stage1/dumps/geometry
 ```
 
 Each driver writes `meta.txt` recording the PISM revision, config file, and
@@ -276,6 +278,49 @@ component must reproduce.
     `mf = melt_rate·rho_i = 1.497038e-06` kg m^-2 s^-1 everywhere; the
     surface SMB partition identity and the surface==atmosphere temperature
     identity hold to 0; all 32 melting cells are on the floating shelf.
+- **Geometry / mass continuity** (`geometry/`): the two integrated steps of
+  `GeometryEvolution` (`flow_step` — advective + diffusive mass transport —
+  and `source_term_step` — surface + basal mass balance), each over `dt = 1 yr`
+  from the SAME test-F exact geometry (flat bed, `H` = exact FG, sea level 0:
+  517 grounded + 444 ice-free bedrock cells), plus the pointwise
+  `part_grid_threshold_thickness`.
+  - The forcing is exactly specified: the advective velocity is the exact
+    test-F **surface** velocity `U_surf(r)·(x/r, y/r)` (a cold no-slide SIA
+    solution, so these speeds are small, max ~2.6 m/yr — the advective part is
+    a small correction); the diffusive flux is a prescribed Gaussian radial
+    field `q = q0·(r/Rq)·exp(-(r/Rq)^2)·e_r` with `q0 = 2e-2 m^2/s`,
+    `Rq = 300 km` on the staggered edge midpoints (a documented, calibrated
+    surrogate for the real test-F SIA flux); the SMB is the exact test-F
+    `M(r)·rho_ice`; the basal melt rate is `0.05 m/yr·exp(-(r/200 km)^2)`; the
+    thickness BC mask is 0 everywhere.
+  - `geometry/columns.csv`: per cell the full I-boundary trace for both steps
+    — `(H, surface, bed, mask)`, the forcing `(u, v, qx, qy, smb_rate,
+    basal_melt_rate)`, and the geometry out + thickness change after each step.
+  - `geometry/flow_inputs.nc` / `geometry/source_inputs.nc`: the complete
+    in/out NetCDF traces (geometry in, forcing, the model's internal fields —
+    `flux_staggered`, `flux_divergence`, `thickness_change`,
+    `conservation_error`, `effective_SMB`, `effective_BMB` — and the geometry
+    out with `ensure_consistency` applied, named `thk_flow_out`/`usurf_flow_out`/
+    `mask_flow_out` and `thk_source_out`/`usurf_source_out`/`mask_source_out`).
+  - `geometry/pointwise.csv`: 560 samples of
+    `part_grid_threshold_thickness(cell_type, thickness, surface, bed)` over
+    7 mask patterns × `(H, h, bed)` grids — a pure `.esm` test target. The
+    function averages `H` and `h` over the icy N/S/E/W neighbors and returns
+    `max(min(h_avg - bed, H_avg), 0)` (0 if no icy neighbors); all 560 rows
+    match this closed form to < 1e-14.
+  - Validation (see `runs/geometry.json`): the flow_step domain-sum mass
+    balance closes to round-off (`sum(H_change) = 6.59e-12 m`; the flux
+    limiters zero the fluxes on the ice-free outer ring, so `sum(div Q)`
+    telescopes to 0); the contract residual
+    `sum(dH + dHref - (-dt divQ) - conservation_error) = 6.6e-12 m`; the dome
+    cell `(15,15)` thins by `dH = -4.25123 m = -(4.1684 diffusive + 0.0829
+    advective)`; the flow advances the ice front one cell (76 cells go mask
+    0 → 2 with `H_out` in [0.033, 0.093] m). The source step sums
+    `dH_SMB = 0.0233458 m` and `dH_BMB = -1.86362 m`, each exactly equal to
+    `dt·sum(smb/rho)` and `-dt·sum(bmr)` (the only non-negativity truncation
+    is 1.7e-6 m at the 444 ice-free cells); the dome gains
+    `dH = 0.0353269 m = dt·M(0) - dt·0.05 m/yr` exactly.
+
 - The test-F/V states mean every dumped quantity has an exact reference value
   (or a clean null state, as with age = 0); the discrete-vs-exact differences
   are the expected discretization error of the C++ model, which the `.esm`

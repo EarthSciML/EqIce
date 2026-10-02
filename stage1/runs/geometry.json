@@ -1,0 +1,75 @@
+{
+  "component": "geometry (GeometryEvolution: flow_step + source_term_step + part_grid_threshold_thickness)",
+  "pism_revision": "v2.3.2 (fa11747)",
+  "type": "integrated_trajectory + pointwise_derivative",
+  "description": "One dt = 1 yr step each of GeometryEvolution::flow_step (advective + diffusive mass transport) and source_term_step (surface + basal mass balance), both from the SAME test-F exact geometry (flat bed, thickness = exact FG H, sea level 0, Mx=My=31, Lx=Ly=900 km; 517 grounded-ice + 444 ice-free-bedrock cells), plus a pointwise sample of part_grid_threshold_thickness. The two steps are independent traces from the same input state (the coupled model runs flow_step then source_term_step on the updated geometry; each step's contract is a trace from an arbitrary input geometry). flow_step contract: H_change + Href_change = dt*(SMB + BMB - flux_divergence) + conservation_error (SMB = BMB = 0 here). Because the outermost ring of the domain is ice-free, the flux limiters zero every flux on the outer boundary, so sum(div Q) telescopes to 0 and the domain-sum of H_change equals sum(conservation_error) to round-off. source_term_step contract: H_change = dH_SMB + dH_BMB with dH_SMB = dt*smb/rho_ice and dH_BMB = -dt*bmr (clamped by effective_change()).",
+  "regenerate": {
+    "command": "source stage1/runs/env.sh && stage1/instrument/instrument_geometry -Mx 31 -My 31 -dt_years 1 -dumps_dir stage1/dumps/geometry",
+    "note": "Run from the repo root. Override grid with -Mx/-My, step with -dt_years, output with -dumps_dir. Overwriting an existing inputs.nc makes the netCDF library leave a .nc~ backup in the dumps directory (delete or ignore it)."
+  },
+  "domain": {
+    "Lx_m": 900000,
+    "Ly_m": 900000,
+    "registration": "CELL_CENTER",
+    "periodicity": "NOT_PERIODIC",
+    "Mx": 31,
+    "My": 31,
+    "dx_m": 58064.516129,
+    "cell_area_m2": 3371488033.298647,
+    "note": "2-D grid only; test-F exact thickness, bed = 0, sea level = 0 (grounded ice / ice-free bedrock; no ocean cells, so the part-grid scheme is inert in the steps and part_grid_threshold_thickness is sampled pointwise instead)"
+  },
+  "time": {
+    "dt_years": 1,
+    "dt_seconds": 31556925.974700,
+    "steps": 1
+  },
+  "setup": {
+    "default_config": "all geometry.*, constants.*, grid.* keys at their defaults; geometry.part_grid.enabled stays 'no'",
+    "test_F": {
+      "L_m": 750000,
+      "H0_m": 3000,
+      "note": "geometry.ice_free_thickness_standard = 0.01 m at its default; the margin cells just outside r = L are ice-free bedrock (mask 0)"
+    },
+    "config_keys_that_matter": {
+      "geometry.ice_free_thickness_standard": 0.01,
+      "geometry.part_grid.enabled": false,
+      "geometry.part_grid.max_iterations": 10,
+      "geometry.update.enabled": true,
+      "geometry.update.use_basal_melt_rate": true,
+      "constants.ice.density": 910.0,
+      "constants.sea_water.density": 1028.0,
+      "constants.standard_gravity": 9.81,
+      "grid.Lz": 4000,
+      "note": "geometry.part_grid.* keys are dumped and the pointwise function is sampled, but the flow/source steps run with part-grid off (no ice-free-ocean cells in the flat-bed test-F state, so the part-grid branch is inert); use_basal_melt_rate = yes makes the source step apply dH_BMB = -dt*bmr"
+    },
+    "forcing": {
+      "advective_velocity": "exact test-F surface velocity (u,v) = U_surf(r)*(x/r,y/r), U_surf = exactFG(0,r,z,0).U[top level]; zero at/outside r >= L. max |u| = 8.16507e-08 m/s = 2.57665 m/yr (test F is a cold no-slide SIA solution, so the advective part is a small correction; the diffusive part carries the visible signal)",
+      "diffusive_flux": "prescribed Gaussian radial flux on the staggered grid (q_x at the east edge midpoint, q_y at the north edge midpoint of each cell): q(r) = q0*(r/Rq)*exp(-(r/Rq)^2)*(x/r,y/r), q0 = 2e-2 m^2/s, Rq = 300 km. Documented surrogate for the real test-F SIA flux (max |q_SIA| ~ 2e-2 m^2/s at this resolution). Continuum divergence: div q = (2 q0/Rq) exp(-s)(1-s), s = (r/Rq)^2. max |q| = 8.56231e-03 m^2/s; after limiting max |flux| = 8.74978e-03 m^2/s",
+      "smb_rate": "exact test-F surface mass balance M(r) * rho_ice (kg m^-2 s^-1; exactFG returns M in m/s); range [-4.05451e-07, 2.46055e-06] kg m^-2 s^-1 = [-0.0140, 0.0853] m/yr",
+      "basal_melt_rate": "0.05 m/yr * exp(-(r/200 km)^2) in ice-equivalent m/s (peak 1.584438e-09 m/s at the dome)",
+      "thickness_bc_mask": "0 everywhere (no Dirichlet thickness B.C.s)"
+    },
+    "coupling_notes": "flow_step consumes the (cell-centered) advective velocity and the (staggered) diffusive flux exactly like the coupled model (which passes the SSA advective_velocity and SIA diffusive_flux from the stress balance); here both are prescribed. The geometry out of each step is geometry_in + the model's reported changes, then Geometry::ensure_consistency (as the coupled model does after apply_flux_divergence/apply_mass_fluxes)."
+  },
+  "dump_files": {
+    "meta.txt": "pism revision, config file, component, description, dt, grid, cell_area, forcing, command line",
+    "parameters.csv": "geometry.*, constants.*, grid.* config keys (values + units)",
+    "flow_inputs.nc": "flow_step I/O trace: geometry in (usurf, thk, topg, mask, sea_level), advective_velocity (u, v), diffusive_flux[0]/[1], thk_bc_mask, flux_staggered[0]/[1] (total flux after limiting), flux_divergence, thickness_change, ice_area_specific_volume_change, conservation_error, geometry out (thk_flow_out, usurf_flow_out, mask_flow_out)",
+    "source_inputs.nc": "source_term_step I/O trace: geometry in, thk_bc_mask, surface_mass_balance_rate, basal_melt_rate, effective_SMB, effective_BMB (the applied dH in m), geometry out (thk_source_out, usurf_source_out, mask_source_out)",
+    "columns.csv": "per cell for both steps: i,j,x,y,r,H_in,surface_in,bed,mask_in,u,v,qx,qy,smb_rate,basal_melt_rate,H_out_flow,surface_out_flow,mask_out_flow,dH_flow,dH_dt_flow_myr,H_out_source,surface_out_source,mask_out_source,dH_source,dH_dt_source_myr (qx/qy are the staggered diffusive flux on the cell's east/north edges; dH/dt in m/yr)",
+    "pointwise.csv": "part_grid_threshold_thickness sampled over deterministic (cell_type star, thickness star, surface star, bed) inputs: 7 mask patterns (all grounded / all floating / grounded+floating+ocean / 3 icy + 1 ocean / 1 icy + 3 ice-free / all ice-free ocean / all ice-free land) x (H in {0.1,100,1000,3000} m, h in {-500,0,500,2000,4000} m, bed in {-1000,0,500,2000} m) = 560 rows"
+  },
+  "checks": {
+    "flow_mass_balance_closed": "domain-sum mass balance closes: sum(H_change) = 6.58781e-12 m, sum(Href_change) = 0 m, sum(conservation_error) = 0 m; sum(-dt*div Q) = -2.23509e-14 m (= -7.53559e-05 m^3; the boundary fluxes on the ice-free outer ring are limited to zero, so sum(div Q) telescopes to ~0)",
+    "flow_contract_residual": "sum(dH + dHref - (-dt divQ) - conservation_error) = 6.61016e-12 m (round-off)",
+    "flow_dome_cell": "dome cell (15,15), H_in = 3000 m: dH_flow = -4.25123 m = -(dt*div q_diffusive_discrete + dt*div q_advective) = -(4.1684 + 0.0829) m; the continuum diffusive-only estimate -dt*2*q0/Rq = -4.20759 m",
+    "flow_mask_changes": "76 cells change mask, all 0 (ice-free bedrock) -> 2 (grounded ice): the margin ring at r in [754.8, 789.8] km gains 0.033-0.093 m of ice from the upwind advective + diffusive inflow over 1 yr (the ice front advances one grid cell); every changed cell has mask_out_flow = 2 and H_out_flow in [0.033, 0.093] m > the 0.01 m ice-free threshold",
+    "flow_max_change": "max |dH_flow| = 4.25123 m (dome); the margin ring gains up to 0.093 m",
+    "source_sum": "sum(dH_SMB) = 0.0233458 m and sum(dH_BMB) = -1.86362 m, each EXACTLY equal to the analytic dt*sum(smb/rho_ice) and -dt*sum(bmr) (no SMB clamping); sum(H_change) = -1.84028 m",
+    "source_truncation": "non-negativity truncation total -1.72535e-06 m (0 SMB-clamped cells; 444 BMB-clamped cells = the ice-free cells where there is no thickness to melt -- the truncated amount is tiny because the basal melt blob is negligible beyond r = 750 km)",
+    "source_dome_cell": "dome cell: dH_SMB = 0.0853269 m = dt*M(0) exactly (M(0) = 0.0853269 m/yr, the exact test-F surface mass balance at r ~ 0), dH_BMB = -0.05 m = -dt*0.05 m/yr exactly, so dH_source = 0.0353269 m",
+    "source_mask_changes": "0 cells change mask (no cell crosses the ice-free thickness threshold over 1 yr)",
+    "part_grid_threshold": "part_grid_threshold_thickness(cell_type, thickness, surface, bed) = max(min(h_avg - bed, H_avg), 0) (0 if no icy neighbors), where H_avg/h_avg are the averages over the icy N/S/E/W neighbors; ALL 560 sampled rows match this closed form to < 1e-14; hand-checked branches: all-ice-free -> 0; one icy neighbor (H=1000, h=500), bed=-1000 -> 1000; same with bed=2000 -> 0",
+    "determinism": "dumps byte-for-byte identical across reruns (columns.csv, both .nc files, pointwise.csv, parameters.csv; only meta.txt differs because it echoes the -dumps_dir path)"
+  }
+}

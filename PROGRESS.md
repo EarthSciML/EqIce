@@ -294,6 +294,68 @@ updated: 2026-10-01.
   `SurfaceForcing` time interpolation.
 - Deterministic: dumps byte-for-byte identical across reruns.
 
+## Milestone 3 (continued) — geometry (mass continuity) boundary instrumented ✅
+
+- **Geometry traces** ✅ — new `instrument_geometry.cc`: the two integrated
+  steps of `GeometryEvolution` on the test-F exact geometry (flat bed,
+  H = exact FG, sea level 0, Mx=My=31; 517 grounded + 444 ice-free bedrock
+  cells), each over `dt = 1 yr` from the same input state, plus a pointwise
+  sample of `part_grid_threshold_thickness`.
+  - **flow_step** (I-boundary trace): advective velocity = the exact test-F
+    **surface** velocity `U_surf(r)·(x/r, y/r)` (analytic from `exactFG`;
+    test F is a cold no-slide SIA solution, so these speeds are small — max
+    2.58 m/yr — and the advective part is a small correction); diffusive flux
+    = a prescribed Gaussian radial field `q = q0·(r/Rq)·exp(-(r/Rq)^2)·e_r`
+    (`q0 = 2e-2 m^2/s`, `Rq = 300 km`) on the staggered edge midpoints — a
+    documented, exactly-specified surrogate for the real test-F SIA flux
+    (max |q_SIA| ~ 2e-2 m^2/s, so the magnitude is calibrated), with the
+    continuum divergence `div q = (2 q0/Rq) exp(-s)(1-s)` as an analytic
+    target. `thickness_bc_mask = 0` everywhere.
+    - Validation: the domain-sum mass balance closes to round-off —
+      `sum(H_change) = 6.59e-12 m`, `sum(conservation_error) = 0 m`, and
+      `sum(-dt·div Q) = -2.24e-14 m` (= −7.5e-5 m³): because the outermost
+      ring of the domain is ice-free, the flux limiters zero every flux on
+      the outer boundary, so `sum(div Q)` telescopes to 0. The contract
+      residual `sum(dH + dHref − (−dt divQ) − conservation_error) = 6.6e-12 m`.
+    - The dome cell (15,15) thins by `dH_flow = -4.25123 m` =
+      `−(4.1684 diffusive + 0.0829 advective)` m (reconstructed from the
+      dumped edge fluxes exactly; the continuum diffusive-only estimate is
+      `-dt·2q0/Rq = -4.20759 m`).
+    - The flow advances the ice front one grid cell: **76 cells change mask
+      0 (ice-free bedrock) → 2 (grounded ice)** in the margin ring at
+      r ∈ [754.8, 789.8] km, each gaining 0.033–0.093 m of ice over the year
+      (the upwind advective + diffusive inflow crosses the 0.01 m ice-free
+      threshold). No cell thins below zero (conservation_error = 0).
+  - **source_term_step** (I-boundary trace): smb_rate = the exact test-F
+    surface mass balance `M(r)·rho_ice` (analytic); basal_melt_rate =
+    `0.05 m/yr·exp(-(r/200 km)^2)`; same `thickness_bc_mask = 0`.
+    - `sum(dH_SMB) = 0.0233458 m` and `sum(dH_BMB) = -1.86362 m`, each
+      **exactly** equal to `dt·sum(smb/rho_ice)` and `-dt·sum(bmr)`
+      (0 SMB-clamped cells); the only non-negativity truncation is 1.7e-6 m at
+      the 444 ice-free cells (BMB-clamped: nothing to melt there).
+    - Dome cell: `dH_SMB = 0.0853269 m = dt·M(0)` exactly (M(0) = 0.0853 m/yr,
+      the exact test-F SMB near the dome), `dH_BMB = -0.05 m = -dt·0.05 m/yr`
+      exactly; `dH_source = 0.0353269 m`. No mask changes.
+  - **part_grid_threshold_thickness** (D pointwise): 560 samples over
+    7 mask patterns (all grounded / all floating / grounded+floating+ocean /
+    3 icy+1 ocean / 1 icy+3 ice-free / all ice-free ocean / all ice-free land)
+    × (H ∈ {0.1, 100, 1000, 3000} m, h ∈ {−500, 0, 500, 2000, 4000} m,
+    bed ∈ {−1000, 0, 500, 2000} m). **All 560 rows match the closed form
+    `max(min(h_avg − bed, H_avg), 0)` (0 if no icy neighbors) to < 1e-14** —
+    a pure analytic .esm test target.
+  - The part-grid scheme itself is inert in the steps (no ice-free-ocean cells
+    in the flat-bed test-F state, so `geometry.part_grid.enabled = no` as
+    default); the pointwise function is sampled separately, and the flow/source
+    steps use the flat-bed fully-grounded state as the trace geometry.
+- **Dumps** ✅ — `stage1/dumps/geometry/` (6 files, ~1.0 MB): `meta.txt`,
+  `parameters.csv`, `flow_inputs.nc`, `source_inputs.nc` (complete in/out
+  traces with distinct `*_flow_out`/`*_source_out` variable names),
+  `columns.csv` (per-cell trace for both steps), `pointwise.csv`.
+- **Run config** ✅ — `stage1/runs/geometry.json` (grid, dt, forcing choice +
+  formulas, check values).
+- Deterministic: dumps byte-for-byte identical across reruns.
+- This completes the last Stage-1 boundary in PLAN.md §10 milestone 3.
+
 ## Stage 1 — Remaining instrumentation
 
 - [x] Step 1: identify subassembly boundaries → `stage1/boundaries.md`
@@ -301,19 +363,23 @@ updated: 2026-10-01.
       SSA + energy + age + basal strength + hydrology (Routing) + bed
       (PointwiseIsostasy) + calving/frontal melt + surface/ocean (PIK
       atmosphere, PIK/Beckmann–Goosse ocean + Constant cross-check, PIK
-      surface) done**; remaining: Distributed/SteadyState hydrology,
-      LingleClark/Given bed models, geometry (ice geometry update)
+      surface) + geometry (GeometryEvolution flow_step/source_term_step +
+      part_grid_threshold_thickness) done**; remaining (deferred):
+      Distributed/SteadyState hydrology, LingleClark/Given bed models
 - [x] Step 3 (partial): dump subassembly I/O — SSA `nuH`/`taud` (FD
       subassemblies), SIA `delta`/`D`/`q` chains, the
       `MohrCoulombPointwise`/basal-resistance-law pointwise functions, the
       Routing staggered `Wstag/Kstag/Vstag/Qstag` substep fields, the bed
-      `compute_load`/update-law pointwise functions, and the
+      `compute_load`/update-law pointwise functions, the
       atmosphere/ocean/surface pointwise kernels
       (`(lat,usurf)->T_ma`, `H->T_shelf`, `(H,z_b,T_f,T_ocean)->mf`,
-      `(H,bed)->P_awcp`, `smb->(accumulation,melt,runoff)`) are dumped; deeper
+      `(H,bed)->P_awcp`, `smb->(accumulation,melt,runoff)`), and the geometry
+      subassemblies (`flux_staggered`, `flux_divergence`, `thickness_change`,
+      `conservation_error`, `effective_SMB`/`effective_BMB`, and the
+      `part_grid_threshold_thickness` pointwise function) are dumped; deeper
       subassemblies (e.g. the assembled KSP matrix) are deferred
 - [x] Step 4: record run configurations → `stage1/runs/README.md` +
-      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving,surface_ocean}.json`;
+      `stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving,surface_ocean,geometry}.json`;
       dumps stored in `stage1/dumps/`
 - [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
@@ -366,6 +432,9 @@ Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
 - `stage1/dumps/surface_ocean/` — 11 files, ~0.8 MB (regenerate:
   `instrument/instrument_surface_ocean -Mx 31 -My 31 -dumps_dir
   stage1/dumps/surface_ocean`)
+- `stage1/dumps/geometry/` — 6 files, ~1.0 MB (regenerate:
+  `instrument/instrument_geometry -Mx 31 -My 31 -dt_years 1 -dumps_dir
+  stage1/dumps/geometry`)
 - Full dumps are gitignored (`stage1/dumps/*`); `stage1/dumps/README.md`
   documents the layout and regeneration. Numeric test tuples extracted from
   these go into Stage-2 `.esm` `tests` blocks.

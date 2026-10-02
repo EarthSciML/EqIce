@@ -69,12 +69,13 @@ Purpose: produce authoritative input/output traces to build tests from.
 **Status (2026-10-01):** milestone 1 complete (PISM v2.3.2 + PETSc v3.26.0
 built in `stage1/build/`; reference run configs in `stage1/runs/README.md`;
 boundary catalog in `stage1/boundaries.md`). Milestone 2 complete — rheology,
-SIA, and SSA boundaries instrumented. Milestone 3 in progress — the energy,
+SIA, and SSA boundaries instrumented. Milestone 3 complete — the energy,
 age, basal-strength, hydrology (Routing), bed (PointwiseIsostasy),
-calving/front-retreat + frontal-melt, and surface/ocean forcing boundaries are
+calving/front-retreat + frontal-melt, surface/ocean forcing, and geometry
+(mass continuity) boundaries are
 now instrumented too (drivers in `stage1/instrument/`, dumps in
 `stage1/dumps/`, run configs in
-`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving,surface_ocean}.json`).
+`stage1/runs/{rheology,sia,ssa,energy_age,basal_strength,hydrology,bed,calving,surface_ocean,geometry}.json`).
 The calving boundary (test V / van der Veen CFBC shelf, square 65×65 grid)
 covers EigenCalving, vonMisesCalving, HayhurstCalving, CalvingAtThickness +
 FloatKill, the FrontalMeltPhysics kernels, and the Constant frontal-melt model;
@@ -86,9 +87,16 @@ trough bed with a latitude gradient), the PIK / Beckmann–Goosse ocean
 `Q/L` positive = melting, depth-averaged water column pressure) with a
 Constant-ocean cross-check, and the PIK surface (SMB partition, martin surface
 temperature) — see `PROGRESS.md` for the analytic checks and bugs.md #5
-(`ConstantPIK.cc` sign comment).
-Next: the remaining hydrology models (Distributed/SteadyState), the
-LingleClark/Given bed models, and the geometry (ice geometry update) boundary.
+(`ConstantPIK.cc` sign comment). The geometry boundary
+(`instrument_geometry.cc`) covers both integrated steps of
+`GeometryEvolution` — `flow_step` (exact test-F surface velocity +
+prescribed Gaussian diffusive flux, mass-balance closing to round-off, 76
+margin cells advancing 0 → 2) and `source_term_step` (exact test-F SMB
+`M(r)·rho_ice` + basal melt blob, applied dH matching the analytic source
+terms exactly) — plus the pointwise `part_grid_threshold_thickness`
+(`max(min(h_avg − bed, H_avg), 0)`, all 560 samples to < 1e-14).
+Next (deferred): the remaining hydrology models (Distributed/SteadyState)
+and the LingleClark/Given bed models.
 See `PROGRESS.md`.
 
 1. Identify discrete subassembly boundaries in the C++ codes matching the
@@ -184,20 +192,25 @@ whether the `.esm` reproduces or corrects it, and status.
    flux law + staggered substep subassembly), bed (`instrument_bed.cc`,
    `bed::PointwiseIsostasy` two-interval trace + load accumulator +
    `compute_load`/update-law pointwise targets; LingleClark/Given bed models
-   deferred), and calving/front retreat + frontal melt
+   deferred), calving/front retreat + frontal melt
    (`instrument_calving.cc`, test V / van der Veen CFBC shelf on a square
    65×65 grid: EigenCalving, vonMisesCalving, HayhurstCalving,
    CalvingAtThickness + FloatKill, FrontalMeltPhysics kernels, Constant
    frontal-melt model; front-retreat geometry update and prescribed-retreat /
-   Given / Discharge frontal-melt models deferred), and surface/ocean forcing
+   Given / Discharge frontal-melt models deferred), surface/ocean forcing
    (`instrument_surface_ocean.cc`, PIK atmosphere `martin` +
    driver-prescribed precipitation + flat yearly-cycle time series, PIK /
    Beckmann–Goosse ocean + Constant cross-check on the test-F dome over a
    Gaussian ocean trough with a latitude gradient, PIK surface SMB partition;
    Given/Forcing atmosphere and ocean and Given/Delta_T surface models
-   deferred) done; next: the remaining hydrology models (Distributed,
-   SteadyState/EmptyingProblem, NullTransport cross-check), the LingleClark /
-   Given bed models, and the geometry (ice geometry update) boundary.
+   deferred), and geometry (`instrument_geometry.cc`,
+   `GeometryEvolution::flow_step` + `source_term_step` one-step traces on the
+   test-F exact geometry with exact test-F surface-velocity / prescribed
+   Gaussian diffusive-flux / exact test-F SMB forcing + pointwise
+   `part_grid_threshold_thickness` samples) done ✅; deferred (documented in
+   `stage1/boundaries.md`): the remaining hydrology models (Distributed,
+   SteadyState/EmptyingProblem, NullTransport cross-check) and the
+   LingleClark / Given bed models.
 4. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
    bed → surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
