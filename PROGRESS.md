@@ -1,7 +1,7 @@
-# PROGRESS — eqice Stage 1 implementation
+# PROGRESS — eqice implementation
 
-Tracking progress on PLAN.md (Stage 1 — instrument the C++ codes). Last
-updated: 2026-10-01.
+Tracking progress on PLAN.md (Stage 1 — instrument the C++ codes; Stage 2 —
+stubs → physics → EarthSciModels PRs). Last updated: 2026-10-01.
 
 ## Milestone 1 — Confirm PISM source access + build; pick reference run configs ✅
 
@@ -383,10 +383,62 @@ updated: 2026-10-01.
       dumps stored in `stage1/dumps/`
 - [ ] Step 5: extract select dumps into numeric test tuples (feeds Stage 2)
 
-## Stage 2 — Stubs → physics → EarthSciModels PRs (not started)
+## Milestone 4 — Stage 2: ice-rheology component authored and passing ✅
+
+The first Stage-2 deliverable: the PISM ice-rheology boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1 rheology
+dumps (`stage1/dumps/rheology/`).
+
+- **Deliverable** ✅ — `stage2/ice_rheology.esm` (10 models: EnthalpyConverter,
+  EffectiveViscosity, SecondInvariant, and the 7 FlowLawFactory flow laws —
+  isothermal Glen, Paterson–Budd, Arrhenius cold/warm, GPBLD, Hooke,
+  Goldsby–Kohlstedt) plus `stage2/ice_rheology_templates.esm` (the shared
+  expression-template library, imported by reference per model).
+- **Physics** ✅ — matches the instrumented C++ v2.3.2 (`stage1/dumps/rheology/`):
+  - EnthalpyConverter: `E -> (T, T_pa, omega, is_temperate, E_cts, E_l, T_m)`
+    with exact config constants (`T_melting = 273.15`, `L = 3.335e5`,
+    `c_p_ice`, `beta_CC_grad = 7.9e-4 K/m`, `Tm_0 = 273.15`).
+  - Flow laws: `softness = A` (Arrhenius `A(T_pa)` for pb/arr/arrwarm/gk;
+    Hooke `A(T)`; GPBLD temperate branch `A(T_melting)·(1 + 181.25·min(ω, 0.01))`),
+    `hardness = B = A^(-1/n)` (gk `B = A_pb(T_pa)^(-1/n)`), and the strain rate
+    `flow = A·sigma^(n-1)` (gk via the harmonic combination of dislocation,
+    diffusional, and grain-boundary-sliding creep; grain-size sweep tested).
+  - EffectiveViscosity: `nu = (0.5 A)^(-1/n) eps_2D^((1-n)/(2n))` + `dnu`;
+    SecondInvariant: `eps^2 = 0.5 eps_ij eps_ij` with `w_z = -(u_x + v_y)`.
+- **Composition** ✅ — every shared calculation (L(T), Arrhenius A, Hooke A,
+  hardness, flow, effective viscosity, second invariant, …) is an expression
+  template in `ice_rheology_templates.esm`, imported by reference via
+  `expression_template_imports`; match-based op-call rules keep the equations
+  readable as math (e.g. `hardness(T, p)` with the model's own unknowns). No
+  scripts generated equations; only the numeric test tuples were extracted
+  from the C++ dumps.
+- **Tests** ✅ — 62 inline test groups, 313 assertions, passing under both the
+  native and interpreter compilers (`./esm test stage2/ice_rheology.esm` and
+  `--compiler interpreter`): 8 EnthalpyConverter tuples (all 7 outputs), 12
+  effective-viscosity (6 configs × `eps = 0` / Schoof `eps_Schoof`), 9
+  second-invariant, 4–5 per flow law (softness/hardness/flow/T/T_pa/ω/
+  is_temperate), 7 Goldsby–Kohlstedt (incl. grain-size sweep). Relative
+  tolerances 1e-12 (1e-10 Hooke, 1e-9 GK).
+- **Verification** ✅ — `./esm validate` clean on both files; `./esm info`
+  lists the 10 models; `./esm units --check`: 43 consistent / 0 mismatched /
+  20 not checked (the not-checked entries are the intentional non-literal `^`
+  exponents with parameter `n` — no unit mismatches).
+- **Deferred** — `AveragedHardness` (the flow-law factory's depth-averaged
+  hardness): the Stage-1 dumps are not self-contained (they depend on the full
+  column solution), so it waits for the SIA/SSA components' column traces.
+- **C++ bugs** — none new in the rheology boundary. Two by-design quirks
+  (not bugs): the arr cold flow uses unadjusted `T` while softness uses
+  `T_pa`; gk `softness()` throws in C++ (dump NaN), so the gk model omits it
+  and exposes `eps_disl/eps_diff/eps_gbs/eps_basal` instead. `bugs.md`
+  unchanged.
+
+## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from
 Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
+Rheology (milestone 4 above) is done; the remaining boundaries follow the
+PLAN.md §5 sequencing (SIA/SSA → energy → basal/hydrology → bed →
+surface/ocean/calving → subassemblies).
 
 ## Stage 3 — Top-level `eqice.esm` (not started)
 

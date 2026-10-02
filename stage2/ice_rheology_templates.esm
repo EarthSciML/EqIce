@@ -1,0 +1,452 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ice_rheology_templates",
+    "description": "Expression-template library for the PISM ice-rheology component (stage 2 of the eqice project). Carries the enthalpy-converter map (E,p -> T, T_pa, omega, is_temperate, E_cts, E_l, T_m), the Glen-Nye flow-law softness factors (Paterson-Budd, Arrhenius cold/warm, Hooke, GPBLD), the flow/hardness power laws, the regularized effective viscosity, and the Goldsby-Kohlstedt hybrid flow decomposition. Free names in template bodies (constants such as c_ice, T_melting, R_ideal_gas, ...) resolve against the importing model's declared parameters (esm-spec §9.6.1). Reference implementation: PISM v2.3.2 (stage1/pism/src/rheology/*, stage1/pism/src/util/EnthalpyConverter.cc)."
+  },
+  "expression_templates": {
+    "pressure_melting_temperature": {
+      "description": "Pressure melting point T_m(p) = T_melting - beta*p (EnthalpyConverter::melting_temperature).",
+      "params": ["p"],
+      "match": { "op": "pressure_melting_temperature", "args": ["p"] },
+      "body": {
+        "op": "-",
+        "args": [
+          "T_melting",
+          { "op": "*", "args": ["beta_Clausius_Clapeyron", "p"] }
+        ]
+      }
+    },
+    "latent_heat_fusion": {
+      "description": "Latent heat of fusion L(T_pm) = L_0 + (c_w - c_i)*(T_pm - 273.15) (EnthalpyConverter::L; the literal 273.15 matches the configured fresh-water melting point to double precision).",
+      "params": ["T_pm"],
+      "match": { "op": "latent_heat_fusion", "args": ["T_pm"] },
+      "body": {
+        "op": "+",
+        "args": [
+          "L_0",
+          { "op": "*",
+            "args": [
+              { "op": "-", "args": ["c_water", "c_ice"] },
+              { "op": "-", "args": ["T_pm", 273.15] }
+            ] }
+        ]
+      }
+    },
+    "cold_temperate_enthalpy": {
+      "description": "Cold-temperate transition enthalpy E_s(p) = c_i*(T_m(p) - T_0) (EnthalpyConverter::enthalpy_cts).",
+      "params": ["p"],
+      "match": { "op": "cold_temperate_enthalpy", "args": ["p"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "c_ice",
+          { "op": "-",
+            "args": [
+              { "op": "pressure_melting_temperature", "args": ["p"] },
+              "T_0"
+            ] }
+        ]
+      }
+    },
+    "temperature_cold": {
+      "description": "Temperature of cold ice from enthalpy: T = E/c_i + T_0 (EnthalpyConverter::temperature_cold).",
+      "params": ["E"],
+      "match": { "op": "temperature_cold", "args": ["E"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "/", "args": ["E", "c_ice"] },
+          "T_0"
+        ]
+      }
+    },
+    "enthalpy_to_temperature": {
+      "description": "Absolute temperature T(E,p): cold ice T = E/c_i + T_0; temperate ice T = T_m(p) (EnthalpyConverter::temperature).",
+      "params": ["E", "p"],
+      "match": { "op": "enthalpy_to_temperature", "args": ["E", "p"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "<",
+            "args": [ "E", { "op": "cold_temperate_enthalpy", "args": ["p"] } ] },
+          { "op": "temperature_cold", "args": ["E"] },
+          { "op": "pressure_melting_temperature", "args": ["p"] }
+        ]
+      }
+    },
+    "pressure_adjusted_temperature": {
+      "description": "Pressure-adjusted temperature T_pa(E,p) = T(E,p) - T_m(p) + T_melting (EnthalpyConverter::pressure_adjusted_temperature).",
+      "params": ["E", "p"],
+      "match": { "op": "pressure_adjusted_temperature", "args": ["E", "p"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "-",
+            "args": [
+              { "op": "enthalpy_to_temperature", "args": ["E", "p"] },
+              { "op": "pressure_melting_temperature", "args": ["p"] }
+            ] },
+          "T_melting"
+        ]
+      }
+    },
+    "water_fraction": {
+      "description": "Liquid water fraction omega(E,p): 0 for E <= E_s(p), else (E - E_s(p))/L(T_m(p)) (EnthalpyConverter::water_fraction).",
+      "params": ["E", "p"],
+      "match": { "op": "water_fraction", "args": ["E", "p"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "<=",
+            "args": [ "E", { "op": "cold_temperate_enthalpy", "args": ["p"] } ] },
+          0.0,
+          { "op": "/",
+            "args": [
+              { "op": "-",
+                "args": [ "E", { "op": "cold_temperate_enthalpy", "args": ["p"] } ] },
+              { "op": "latent_heat_fusion",
+                "args": [ { "op": "pressure_melting_temperature", "args": ["p"] } ] }
+            ] }
+        ]
+      }
+    },
+    "arrhenius_softness": {
+      "description": "Arrhenius softness A*exp(-Q/(R*T)) (FlowLaw::softness_paterson_budd single-branch form).",
+      "params": ["A", "Q", "T"],
+      "match": { "op": "arrhenius_softness", "args": ["A", "Q", "T"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "A",
+          { "op": "exp",
+            "args": [ { "op": "/",
+                        "args": [ { "op": "-", "args": ["Q"] },
+                                  { "op": "*", "args": ["R_ideal_gas", "T"] } ] } ] }
+        ]
+      }
+    },
+    "pb_softness": {
+      "description": "Paterson-Budd softness A(T_pa): cold branch (A_cold,Q_cold) below T_critical, warm branch above (FlowLaw::softness_paterson_budd).",
+      "params": ["T_pa"],
+      "match": { "op": "pb_softness", "args": ["T_pa"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "<", "args": ["T_pa", "T_critical"] },
+          { "op": "arrhenius_softness", "args": ["A_cold", "Q_cold", "T_pa"] },
+          { "op": "arrhenius_softness", "args": ["A_warm", "Q_warm", "T_pa"] }
+        ]
+      }
+    },
+    "hooke_softness": {
+      "description": "Hooke softness A*exp(-Q/(R*T_pa) + 3*C*(Tr - T_pa)^(-k)) (Hooke::softness_from_temp).",
+      "params": ["T_pa"],
+      "match": { "op": "hooke_softness", "args": ["T_pa"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "A_Hooke",
+          { "op": "exp",
+            "args": [ { "op": "+",
+                        "args": [
+                          { "op": "/",
+                            "args": [ { "op": "-", "args": ["Q_Hooke"] },
+                                      { "op": "*", "args": ["R_ideal_gas", "T_pa"] } ] },
+                          { "op": "*",
+                            "args": [ 3.0, "C_Hooke",
+                                      { "op": "^",
+                                        "args": [
+                                          { "op": "-", "args": ["Tr_Hooke", "T_pa"] },
+                                          { "op": "-", "args": ["k_Hooke"] }
+                                        ] } ] }
+                        ] } ] }
+        ]
+      }
+    },
+    "gpbld_temperate_softness": {
+      "description": "GPBLD temperate-ice softness A(T_0)*(1 + C*min(omega, omega_limit)) with C = water_frac_coeff (GPBLD::softness_impl temperate branch).",
+      "params": ["omega"],
+      "match": { "op": "gpbld_temperate_softness", "args": ["omega"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "pb_softness", "args": ["T_melting"] },
+          { "op": "+",
+            "args": [
+              1.0,
+              { "op": "*",
+                "args": [ "water_frac_coeff",
+                          { "op": "min",
+                            "args": ["omega", "water_frac_observed_limit"] } ] }
+            ] }
+        ]
+      }
+    },
+    "flow_power_law": {
+      "description": "Glen-Nye flow factor A*sigma^(n-1) (FlowLaw::flow_impl).",
+      "params": ["A", "sigma", "n"],
+      "match": { "op": "flow_power_law", "args": ["A", "sigma", "n"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "A",
+          { "op": "^",
+            "args": [ "sigma", { "op": "-", "args": ["n", 1.0] } ] }
+        ]
+      }
+    },
+    "hardness_from_softness": {
+      "description": "Ice hardness B = A^(-1/n) (FlowLaw::hardness_impl).",
+      "params": ["A", "n"],
+      "match": { "op": "hardness_from_softness", "args": ["A", "n"] },
+      "body": {
+        "op": "^",
+        "args": [ "A",
+                  { "op": "/", "args": [ { "op": "-", "args": [1.0] }, "n" ] } ]
+      }
+    },
+    "effective_viscosity": {
+      "description": "Regularized effective viscosity nu = 0.5*B*(eps + gamma)^((1-n)/(2n)) (FlowLaw::effective_viscosity).",
+      "params": ["B", "gamma", "eps", "n"],
+      "match": { "op": "effective_viscosity", "args": ["B", "gamma", "eps", "n"] },
+      "body": {
+        "op": "*",
+        "args": [
+          0.5, "B",
+          { "op": "^",
+            "args": [
+              { "op": "+", "args": ["eps", "gamma"] },
+              { "op": "/",
+                "args": [ { "op": "-", "args": [1.0, "n"] },
+                          { "op": "*", "args": [2.0, "n"] } ] }
+            ] }
+        ]
+      }
+    },
+    "effective_viscosity_derivative": {
+      "description": "Derivative of effective viscosity w.r.t. gamma: dnu = ((1-n)/(2n))*nu/(eps + gamma) (FlowLaw::effective_viscosity).",
+      "params": ["B", "gamma", "eps", "n"],
+      "match": { "op": "effective_viscosity_derivative", "args": ["B", "gamma", "eps", "n"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "/",
+            "args": [ { "op": "-", "args": [1.0, "n"] },
+                      { "op": "*", "args": [2.0, "n"] } ] },
+          { "op": "/",
+            "args": [
+              { "op": "effective_viscosity", "args": ["B", "gamma", "eps", "n"] },
+              { "op": "+", "args": ["eps", "gamma"] }
+            ] }
+        ]
+      }
+    },
+    "second_invariant": {
+      "description": "Squared second invariant of the strain-rate tensor under the shallow-shelf assumptions: gamma = 0.5*(u_x^2 + v_y^2 + w_z^2 + 0.5*(u_y + v_x)^2) with w_z = -(u_x + v_y) from incompressibility (secondInvariant_2D).",
+      "params": ["u_x", "u_y", "v_x", "v_y"],
+      "match": { "op": "second_invariant", "args": ["u_x", "u_y", "v_x", "v_y"] },
+      "body": {
+        "op": "*",
+        "args": [
+          0.5,
+          { "op": "+",
+            "args": [
+              { "op": "^", "args": ["u_x", 2] },
+              { "op": "^", "args": ["v_y", 2] },
+              { "op": "^",
+                "args": [
+                  { "op": "-", "args": [ { "op": "+", "args": ["u_x", "v_y"] } ] },
+                  2
+                ] },
+              { "op": "*",
+                "args": [
+                  0.5,
+                  { "op": "^",
+                    "args": [ { "op": "+", "args": ["u_y", "v_x"] }, 2 ] }
+                ] }
+            ] }
+        ]
+      }
+    },
+    "gk_diffusion_volume": {
+      "description": "Volume-diffusion coefficient D_v = D_0v*exp(-Q_v/(R*T)) (GoldsbyKohlstedt::flow_from_temp).",
+      "params": ["T"],
+      "match": { "op": "gk_diffusion_volume", "args": ["T"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "diff_D_0v",
+          { "op": "exp",
+            "args": [ { "op": "/",
+                        "args": [ { "op": "-", "args": ["diff_Q_v"] },
+                                  { "op": "*", "args": ["R_ideal_gas", "T"] } ] } ] }
+        ]
+      }
+    },
+    "gk_diffusion_boundary": {
+      "description": "Grain-boundary diffusion coefficient D_b = D_0b*exp(-Q_b/(R*T)) (GoldsbyKohlstedt::flow_from_temp).",
+      "params": ["T"],
+      "match": { "op": "gk_diffusion_boundary", "args": ["T"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "diff_D_0b",
+          { "op": "exp",
+            "args": [ { "op": "/",
+                        "args": [ { "op": "-", "args": ["diff_Q_b"] },
+                                  { "op": "*", "args": ["R_ideal_gas", "T"] } ] } ] }
+        ]
+      }
+    },
+    "gk_activation_volume": {
+      "description": "Activation-volume pressure term pV = p*V_act_vol (GoldsbyKohlstedt::flow_from_temp).",
+      "params": ["p"],
+      "match": { "op": "gk_activation_volume", "args": ["p"] },
+      "body": {
+        "op": "*",
+        "args": [ "V_act_vol", "p" ]
+      }
+    },
+    "gk_diffusional_strain_rate": {
+      "description": "Diffusional-flow contribution 42*V_m*(D_v + pi*delta*D_b/gs)/(R*T*gs^2); D_b carries the 1000x Coble-creep scaling above diff_crit_temp (GoldsbyKohlstedt::flow_from_temp).",
+      "params": ["stress", "T", "gs"],
+      "match": { "op": "gk_diffusional_strain_rate", "args": ["stress", "T", "gs"] },
+      "body": {
+        "op": "*",
+        "args": [
+          42.0,
+          "diff_V_m",
+          { "op": "/",
+            "args": [
+              { "op": "+",
+                "args": [
+                  { "op": "gk_diffusion_volume", "args": ["T"] },
+                  { "op": "*",
+                    "args": [
+                      3.141592653589793,
+                      "diff_delta",
+                      { "op": "/",
+                        "args": [
+                          { "op": "*",
+                            "args": [
+                              { "op": "gk_diffusion_boundary", "args": ["T"] },
+                              { "op": "ifelse",
+                                "args": [
+                                  { "op": ">", "args": ["T", "diff_crit_temp"] },
+                                  1000.0,
+                                  1.0
+                                ] }
+                            ] },
+                          "gs"
+                        ] }
+                    ] }
+                ] },
+              { "op": "*",
+                "args": [
+                  { "op": "*", "args": ["R_ideal_gas", "T"] },
+                  { "op": "^", "args": ["gs", 2] }
+                ] }
+            ] }
+        ]
+      }
+    },
+    "gk_dislocation_strain_rate": {
+      "description": "Dislocation-creep contribution A*stress^(n-1)*exp(-(Q + pV)/(R*T)), cold/warm branches split at disl_crit_temp (GoldsbyKohlstedt::flow_from_temp).",
+      "params": ["stress", "T", "p"],
+      "match": { "op": "gk_dislocation_strain_rate", "args": ["stress", "T", "p"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": ["T", "disl_crit_temp"] },
+          { "op": "*",
+            "args": [
+              "disl_A_warm",
+              { "op": "^", "args": [ "stress", { "op": "-", "args": ["disl_n", 1.0] } ] },
+              { "op": "exp",
+                "args": [ { "op": "/",
+                            "args": [
+                              { "op": "-",
+                                "args": [ { "op": "+", "args": ["disl_Q_warm", { "op": "gk_activation_volume", "args": ["p"] } ] } ] },
+                              { "op": "*", "args": ["R_ideal_gas", "T"] }
+                            ] } ] }
+            ] },
+          { "op": "*",
+            "args": [
+              "disl_A_cold",
+              { "op": "^", "args": [ "stress", { "op": "-", "args": ["disl_n", 1.0] } ] },
+              { "op": "exp",
+                "args": [ { "op": "/",
+                            "args": [
+                              { "op": "-",
+                                "args": [ { "op": "+", "args": ["disl_Q_cold", { "op": "gk_activation_volume", "args": ["p"] } ] } ] },
+                              { "op": "*", "args": ["R_ideal_gas", "T"] }
+                            ] } ] }
+            ] }
+        ]
+      }
+    },
+    "gk_basal_strain_rate": {
+      "description": "Basal (easy-slip) contribution basal_A*stress^(n-1)*exp(-(Q + pV)/(R*T)) (GoldsbyKohlstedt::flow_from_temp).",
+      "params": ["stress", "T", "p"],
+      "match": { "op": "gk_basal_strain_rate", "args": ["stress", "T", "p"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "basal_A",
+          { "op": "^", "args": [ "stress", { "op": "-", "args": ["basal_n", 1.0] } ] },
+          { "op": "exp",
+            "args": [ { "op": "/",
+                        "args": [
+                          { "op": "-",
+                            "args": [ { "op": "+", "args": ["basal_Q", { "op": "gk_activation_volume", "args": ["p"] } ] } ] },
+                          { "op": "*", "args": ["R_ideal_gas", "T"] }
+                        ] } ] }
+        ]
+      }
+    },
+    "gk_gbs_strain_rate": {
+      "description": "Grain-boundary-sliding contribution A*stress^(n-1)/gs^p_sz * exp(-(Q + pV)/(R*T)), cold/warm branches split at gbs_crit_temp (GoldsbyKohlstedt::flow_from_temp).",
+      "params": ["stress", "T", "p", "gs"],
+      "match": { "op": "gk_gbs_strain_rate", "args": ["stress", "T", "p", "gs"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": ["T", "gbs_crit_temp"] },
+          { "op": "*",
+            "args": [
+              "gbs_A_warm",
+              { "op": "/",
+                "args": [
+                  { "op": "^", "args": [ "stress", { "op": "-", "args": ["gbs_n", 1.0] } ] },
+                  { "op": "^", "args": ["gs", "p_grain_sz_exp"] }
+                ] },
+              { "op": "exp",
+                "args": [ { "op": "/",
+                            "args": [
+                              { "op": "-",
+                                "args": [ { "op": "+", "args": ["gbs_Q_warm", { "op": "gk_activation_volume", "args": ["p"] } ] } ] },
+                              { "op": "*", "args": ["R_ideal_gas", "T"] }
+                            ] } ] }
+            ] },
+          { "op": "*",
+            "args": [
+              "gbs_A_cold",
+              { "op": "/",
+                "args": [
+                  { "op": "^", "args": [ "stress", { "op": "-", "args": ["gbs_n", 1.0] } ] },
+                  { "op": "^", "args": ["gs", "p_grain_sz_exp"] }
+                ] },
+              { "op": "exp",
+                "args": [ { "op": "/",
+                            "args": [
+                              { "op": "-",
+                                "args": [ { "op": "+", "args": ["gbs_Q_cold", { "op": "gk_activation_volume", "args": ["p"] } ] } ] },
+                              { "op": "*", "args": ["R_ideal_gas", "T"] }
+                            ] } ] }
+            ] }
+        ]
+      }
+    }
+  }
+}

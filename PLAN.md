@@ -117,6 +117,14 @@ reference them from the plan.
 
 ## 5. Stage 2 — Stubs → physics → EarthSciModels PRs
 
+**Status (2026-10-01):** the first leaf component — ice rheology
+(`stage2/ice_rheology.esm` + `stage2/ice_rheology_templates.esm`) — is
+authored with the physics from the Stage-1 dumps and all 313 inline assertions
+pass (`./esm validate` / `test` / `units --check` clean; `AveragedHardness`
+deferred until SIA/SSA column traces exist). See `PROGRESS.md` milestone 4.
+Next: stress balance (SIA, SSA), then energy, basal/hydrology, bed,
+surface/ocean/calving, subassemblies (item 4 of §10).
+
 For each component (bottom-up; leaf physics first, then subassemblies):
 
 1. **Hand-author a stub** `.esm` declaring the component's unknowns,
@@ -211,8 +219,9 @@ whether the `.esm` reproduces or corrects it, and status.
    `stage1/boundaries.md`): the remaining hydrology models (Distributed,
    SteadyState/EmptyingProblem, NullTransport cross-check) and the
    LingleClark / Given bed models.
-4. Stage-2: rheology → stress balance (SIA, SSA) → energy → basal/hydrology →
-   bed → surface/ocean/calving → subassemblies.
+4. Stage-2: rheology ✅ (first leaf component, `stage2/ice_rheology.esm`,
+   313/313 tests passing) → stress balance (SIA, SSA) → energy →
+   basal/hydrology → bed → surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 

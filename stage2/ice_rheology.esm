@@ -1,0 +1,5659 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ice_rheology",
+    "description": "PISM ice-rheology component (stage 2 of the eqice project): the enthalpy converter (E,p -> T, T_pa, omega, is_temperate, E_cts, E_l, T_m), the Glen-Nye flow laws selectable through FlowLawFactory (isothermal Glen, Paterson-Budd, Arrhenius cold/warm, GPBLD, Hooke, Goldsby-Kohlstedt), the regularized effective viscosity, and the shallow-shelf second invariant. All shared math is imported by reference from ./ice_rheology_templates.esm. Tests assert the instantaneous FlowLaw/EnthalpyConverter/effective-viscosity/second-invariant boundary outputs dumped by the instrumented PISM v2.3.2 run (stage1/dumps/rheology/)."
+  },
+  "models": {
+    "EnthalpyConverter": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "T_m": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure melting temperature T_m(p)"
+        },
+        "E_cts": {
+          "type": "unknown",
+          "units": "J/kg",
+          "description": "cold-temperate transition enthalpy E_s(p)"
+        },
+        "E_l": {
+          "type": "unknown",
+          "units": "J/kg",
+          "description": "enthalpy of liquid water E_l(p)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p) (energy.model = enthalpy)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::melting_temperature",
+          "lhs": "T_m",
+          "rhs": {
+            "op": "pressure_melting_temperature",
+            "args": [
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::enthalpy_cts",
+          "lhs": "E_cts",
+          "rhs": {
+            "op": "cold_temperate_enthalpy",
+            "args": [
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::enthalpy_liquid",
+          "lhs": "E_l",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "E_cts",
+              {
+                "op": "latent_heat_fusion",
+                "args": [
+                  "T_m"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate for energy.model = enthalpy",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Enthalpy converter point: E=0 J/kg, p=0 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 0,
+            "p": 0
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 100449.99999999994,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 434449.99999999994,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Enthalpy converter point: E=0 J/kg, p=45000000 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 0,
+            "p": 45000000
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 226.705,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 93308.00499999993,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 419625.6499999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Enthalpy converter point: E=95000 J/kg, p=45000000 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 95000,
+            "p": 45000000
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 93308.00499999993,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 419625.6499999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Enthalpy converter point: E=110000 J/kg, p=0 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 110000,
+            "p": 0
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.028592814371257658,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 100449.99999999994,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 434449.99999999994,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_5",
+          "description": "Enthalpy converter point: E=280000 J/kg, p=20000000 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 280000,
+            "p": 20000000
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 271.57,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5527288815526822,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 97275.77999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 427861.4,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 271.57,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_6",
+          "description": "Enthalpy converter point: E=405000 J/kg, p=0 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 405000,
+            "p": 0
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9118263473053894,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 100449.99999999994,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 434449.99999999994,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_7",
+          "description": "Enthalpy converter point: E=20000 J/kg, p=1000000 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 20000,
+            "p": 1000000
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 233.10520159283226,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 233.18420159283227,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 100291.28899999993,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 434120.5699999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 273.07099999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_8",
+          "description": "Enthalpy converter point: E=80000 J/kg, p=30000000 Pa (stage1/dumps/rheology/enthalpy_converter.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "E": 80000,
+            "p": 30000000
+          },
+          "assertions": [
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 262.97080637132905,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 265.34080637132905,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_cts",
+              "time": 0.0,
+              "expected": 95688.66999999994,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "E_l",
+              "time": 0.0,
+              "expected": 424567.0999999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_m",
+              "time": 0.0,
+              "expected": 270.78,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "EffectiveViscosity": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "B": {
+          "type": "parameter",
+          "units": "Pa s^(1/3)",
+          "default": 10000.0,
+          "description": "ice hardness"
+        },
+        "gamma": {
+          "type": "parameter",
+          "units": "1/s^2",
+          "default": 1e-14,
+          "description": "second invariant of the strain-rate tensor"
+        },
+        "eps": {
+          "type": "parameter",
+          "units": "1/s^2",
+          "default": 0.0,
+          "description": "Schoof regularization (flow_law.Schoof_regularizing_velocity / flow_law.Schoof_regularizing_length squared)"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "nu": {
+          "type": "unknown",
+          "units": "Pa s",
+          "description": "regularized effective viscosity"
+        },
+        "dnu": {
+          "type": "unknown",
+          "units": "Pa s^3",
+          "description": "derivative of effective viscosity with respect to gamma"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "FlowLaw::effective_viscosity",
+          "lhs": "nu",
+          "rhs": {
+            "op": "effective_viscosity",
+            "args": [
+              "B",
+              "gamma",
+              "eps",
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "FlowLaw::effective_viscosity (dnu output)",
+          "lhs": "dnu",
+          "rhs": {
+            "op": "effective_viscosity_derivative",
+            "args": [
+              "B",
+              "gamma",
+              "eps",
+              "n"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1_zero",
+          "description": "Effective viscosity: B=10000 Pa s^(1/3), gamma=1e-14 s^-2, eps=0 (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 10000,
+            "gamma": 1e-14,
+            "eps": 0.0,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 232079441.68063882,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -7.735981389354627e+21,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_1_schoof",
+          "description": "Effective viscosity: B=10000 Pa s^(1/3), gamma=1e-14 s^-2, eps=Schoof regularization (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 10000,
+            "gamma": 1e-14,
+            "eps": 1.0041778044611885e-27,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 232079441.68063107,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -7.735981389353593e+21,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2_zero",
+          "description": "Effective viscosity: B=10000 Pa s^(1/3), gamma=1e-06 s^-2, eps=0 (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 10000,
+            "gamma": 1e-06,
+            "eps": 0.0,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 499999.9999999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -166666666666.66663,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2_schoof",
+          "description": "Effective viscosity: B=10000 Pa s^(1/3), gamma=1e-06 s^-2, eps=Schoof regularization (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 10000,
+            "gamma": 1e-06,
+            "eps": 1.0041778044611885e-27,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 499999.9999999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -166666666666.66663,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3_zero",
+          "description": "Effective viscosity: B=100000 Pa s^(1/3), gamma=1e-14 s^-2, eps=0 (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 100000,
+            "gamma": 1e-14,
+            "eps": 0.0,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 2320794416.806388,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -7.735981389354626e+22,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3_schoof",
+          "description": "Effective viscosity: B=100000 Pa s^(1/3), gamma=1e-14 s^-2, eps=Schoof regularization (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 100000,
+            "gamma": 1e-14,
+            "eps": 1.0041778044611885e-27,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 2320794416.8063107,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -7.735981389353592e+22,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4_zero",
+          "description": "Effective viscosity: B=1000000 Pa s^(1/3), gamma=1e-10 s^-2, eps=0 (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 1000000,
+            "gamma": 1e-10,
+            "eps": 0.0,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 1077217345.0159414,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -3.590724483386471e+18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4_schoof",
+          "description": "Effective viscosity: B=1000000 Pa s^(1/3), gamma=1e-10 s^-2, eps=Schoof regularization (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 1000000,
+            "gamma": 1e-10,
+            "eps": 1.0041778044611885e-27,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 1077217345.0159414,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -3.590724483386471e+18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_5_zero",
+          "description": "Effective viscosity: B=10000000 Pa s^(1/3), gamma=1e-06 s^-2, eps=0 (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 10000000,
+            "gamma": 1e-06,
+            "eps": 0.0,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 499999999.9999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -166666666666666.62,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_5_schoof",
+          "description": "Effective viscosity: B=10000000 Pa s^(1/3), gamma=1e-06 s^-2, eps=Schoof regularization (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 10000000,
+            "gamma": 1e-06,
+            "eps": 1.0041778044611885e-27,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 499999999.9999999,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -166666666666666.62,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_6_zero",
+          "description": "Effective viscosity: B=1000000000 Pa s^(1/3), gamma=1e-14 s^-2, eps=0 (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 1000000000,
+            "gamma": 1e-14,
+            "eps": 0.0,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 23207944168063.883,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -7.735981389354628e+26,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_6_schoof",
+          "description": "Effective viscosity: B=1000000000 Pa s^(1/3), gamma=1e-14 s^-2, eps=Schoof regularization (stage1/dumps/rheology/effective_viscosity_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "B": 1000000000,
+            "gamma": 1e-14,
+            "eps": 1.0041778044611885e-27,
+            "n": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "nu",
+              "time": 0.0,
+              "expected": 23207944168063.105,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "dnu",
+              "time": 0.0,
+              "expected": -7.735981389353593e+26,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "SecondInvariant": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "u_x": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "description": "du/dx"
+        },
+        "u_y": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "description": "du/dy"
+        },
+        "v_x": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "description": "dv/dx"
+        },
+        "v_y": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0,
+          "description": "dv/dy"
+        },
+        "gamma": {
+          "type": "unknown",
+          "units": "1/s^2",
+          "description": "squared second invariant gamma = 0.5 D_ij D_ij"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "secondInvariant_2D",
+          "lhs": "gamma",
+          "rhs": {
+            "op": "second_invariant",
+            "args": [
+              "u_x",
+              "u_y",
+              "v_x",
+              "v_y"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Second invariant: u_x=0.0 s^-1, u_y=1e-13 s^-1, v_x=1e-13 s^-1, v_y=0.0 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 0.0,
+            "u_y": 1e-13,
+            "v_x": 1e-13,
+            "v_y": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 1e-26,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Second invariant: u_x=1e-13 s^-1, u_y=0.0 s^-1, v_x=0.0 s^-1, v_y=0.0 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 1e-13,
+            "u_y": 0.0,
+            "v_x": 0.0,
+            "v_y": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 1e-26,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Second invariant: u_x=1e-13 s^-1, u_y=-1e-13 s^-1, v_x=1e-13 s^-1, v_y=1e-13 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 1e-13,
+            "u_y": -1e-13,
+            "v_x": 1e-13,
+            "v_y": 1e-13
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 3e-26,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Second invariant: u_x=1e-12 s^-1, u_y=0.0 s^-1, v_x=0.0 s^-1, v_y=-1e-12 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 1e-12,
+            "u_y": 0.0,
+            "v_x": 0.0,
+            "v_y": -1e-12
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 1e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_5",
+          "description": "Second invariant: u_x=1e-12 s^-1, u_y=-1e-12 s^-1, v_x=1e-12 s^-1, v_y=1e-12 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 1e-12,
+            "u_y": -1e-12,
+            "v_x": 1e-12,
+            "v_y": 1e-12
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 2.9999999999999996e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_6",
+          "description": "Second invariant: u_x=1e-11 s^-1, u_y=0.0 s^-1, v_x=0.0 s^-1, v_y=0.0 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 1e-11,
+            "u_y": 0.0,
+            "v_x": 0.0,
+            "v_y": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 9.999999999999999e-23,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_7",
+          "description": "Second invariant: u_x=1e-10 s^-1, u_y=0.0 s^-1, v_x=0.0 s^-1, v_y=-1e-10 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 1e-10,
+            "u_y": 0.0,
+            "v_x": 0.0,
+            "v_y": -1e-10
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 1.0000000000000001e-20,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_8",
+          "description": "Second invariant: u_x=0.0 s^-1, u_y=1e-09 s^-1, v_x=1e-09 s^-1, v_y=0.0 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 0.0,
+            "u_y": 1e-09,
+            "v_x": 1e-09,
+            "v_y": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 1e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_9",
+          "description": "Second invariant: u_x=1e-09 s^-1, u_y=-1e-09 s^-1, v_x=1e-09 s^-1, v_y=1e-09 s^-1 (stage1/dumps/rheology/second_invariant.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "u_x": 1e-09,
+            "u_y": -1e-09,
+            "v_x": 1e-09,
+            "v_y": 1e-09
+          },
+          "assertions": [
+            {
+              "variable": "gamma",
+              "time": 0.0,
+              "expected": 3.0000000000000002e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "FlowLawIsothermalGlen": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "stress": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "effective stress"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "gs": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.001,
+          "description": "grain size (unused by this law)"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant (constants.ideal_gas_constant)"
+        },
+        "A_isothermal_glen": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 3.1689e-24,
+          "description": "isothermal-Glen ice softness (flow_law.isothermal_Glen.ice_softness)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p)"
+        },
+        "softness": {
+          "type": "unknown",
+          "units": "Pa^-3/s",
+          "description": "ice softness A"
+        },
+        "hardness": {
+          "type": "unknown",
+          "units": "Pa s^(1/3)",
+          "description": "ice hardness B = A^(-1/n)"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "flow factor A*sigma^(n-1)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "IsothermalGlen::softness_impl",
+          "lhs": "softness",
+          "rhs": "A_isothermal_glen"
+        },
+        {
+          "_comment": "FlowLaw::hardness_impl",
+          "lhs": "hardness",
+          "rhs": {
+            "op": "hardness_from_softness",
+            "args": [
+              "softness",
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "IsothermalGlen::flow_impl",
+          "lhs": "flow",
+          "rhs": {
+            "op": "flow_power_law",
+            "args": [
+              "softness",
+              "stress",
+              "n"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 3.1689e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 68081715.1985767,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.1688999999999998e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Flow-law point: stress=1000.0 Pa, E=95000.0 J/kg, p=45000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 95000.0,
+            "p": 45000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 3.1689e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 68081715.1985767,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.1688999999999998e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Flow-law point: stress=100000.0 Pa, E=280000.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 100000.0,
+            "E": 280000.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 3.1689e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 68081715.1985767,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.1689e-14,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5375748502994013,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Flow-law point: stress=1000000.0 Pa, E=405000.0 J/kg, p=45000000.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_isothermal_glen.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000000.0,
+            "E": 405000.0,
+            "p": 45000000.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 3.1689e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 68081715.1985767,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.1689e-12,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9551797145385751,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "FlowLawPatersonBudd": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "stress": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "effective stress"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "gs": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.001,
+          "description": "grain size (unused by this law)"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant (constants.ideal_gas_constant)"
+        },
+        "A_cold": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 3.61e-13,
+          "description": "Paterson-Budd cold-branch softness prefactor (flow_law.Paterson_Budd.A_cold)"
+        },
+        "A_warm": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 1730.0,
+          "description": "Paterson-Budd warm-branch softness prefactor (flow_law.Paterson_Budd.A_warm)"
+        },
+        "Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "Paterson-Budd cold-branch activation energy (flow_law.Paterson_Budd.Q_cold)"
+        },
+        "Q_warm": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 139000.0,
+          "description": "Paterson-Budd warm-branch activation energy (flow_law.Paterson_Budd.Q_warm)"
+        },
+        "T_critical": {
+          "type": "parameter",
+          "units": "K",
+          "default": 263.15,
+          "description": "Paterson-Budd cold/warm transition temperature (flow_law.Paterson_Budd.T_critical)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p)"
+        },
+        "softness": {
+          "type": "unknown",
+          "units": "Pa^-3/s",
+          "description": "ice softness A"
+        },
+        "hardness": {
+          "type": "unknown",
+          "units": "Pa s^(1/3)",
+          "description": "ice hardness B = A^(-1/n)"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "flow factor A*sigma^(n-1)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "PatersonBudd::softness_impl (uses T_pa)",
+          "lhs": "softness",
+          "rhs": {
+            "op": "pb_softness",
+            "args": [
+              "T_pa"
+            ]
+          }
+        },
+        {
+          "_comment": "FlowLaw::hardness_impl",
+          "lhs": "hardness",
+          "rhs": {
+            "op": "hardness_from_softness",
+            "args": [
+              "softness",
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "PatersonBudd::flow_impl (flow uses the pressure-adjusted temperature)",
+          "lhs": "flow",
+          "rhs": {
+            "op": "flow_power_law",
+            "args": [
+              "softness",
+              "stress",
+              "n"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_pb.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 3.258190201647245e-27,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 674540228.7500812,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.258190201647245e-21,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Flow-law point: stress=1000.0 Pa, E=95000.0 J/kg, p=45000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_pb.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 95000.0,
+            "p": 45000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 4.5429992144641284e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 4.5429992144641285e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Flow-law point: stress=100000.0 Pa, E=280000.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_pb.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 100000.0,
+            "E": 280000.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 4.5429992144641284e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 4.5429992144641285e-14,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5375748502994013,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Flow-law point: stress=1000000.0 Pa, E=405000.0 J/kg, p=45000000.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_pb.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000000.0,
+            "E": 405000.0,
+            "p": 45000000.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 4.5429992144641284e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 4.5429992144641285e-12,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9551797145385751,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "FlowLawArrheniusCold": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "stress": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "effective stress"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "gs": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.001,
+          "description": "grain size (unused by this law)"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant (constants.ideal_gas_constant)"
+        },
+        "A_cold": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 3.61e-13,
+          "description": "Arrhenius cold-case softness prefactor (flow_law.Paterson_Budd.A_cold)"
+        },
+        "Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "Arrhenius cold-case activation energy (flow_law.Paterson_Budd.Q_cold)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p)"
+        },
+        "softness": {
+          "type": "unknown",
+          "units": "Pa^-3/s",
+          "description": "ice softness A (computed from T_pa)"
+        },
+        "hardness": {
+          "type": "unknown",
+          "units": "Pa s^(1/3)",
+          "description": "ice hardness B = A^(-1/n)"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "flow factor A*sigma^(n-1)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "PatersonBuddCold::softness_from_temp (softness uses T_pa)",
+          "lhs": "softness",
+          "rhs": {
+            "op": "arrhenius_softness",
+            "args": [
+              "A_cold",
+              "Q_cold",
+              "T_pa"
+            ]
+          }
+        },
+        {
+          "_comment": "FlowLaw::hardness_impl",
+          "lhs": "hardness",
+          "rhs": {
+            "op": "hardness_from_softness",
+            "args": [
+              "softness",
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "PatersonBuddCold::flow_from_temp ignores pressure and uses the NON-pressure-adjusted temperature",
+          "lhs": "flow",
+          "rhs": {
+            "op": "flow_power_law",
+            "args": [
+              {
+                "op": "arrhenius_softness",
+                "args": [
+                  "A_cold",
+                  "Q_cold",
+                  "T"
+                ]
+              },
+              "stress",
+              "n"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arr.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 3.258190201647245e-27,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 674540228.7500812,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.258190201647245e-21,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Flow-law point: stress=1000.0 Pa, E=95000.0 J/kg, p=45000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arr.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 95000.0,
+            "p": 45000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 1.2128923676073177e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 93768991.60402009,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 8.561012525185372e-19,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Flow-law point: stress=100000.0 Pa, E=280000.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arr.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 100000.0,
+            "E": 280000.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 1.2128923676073177e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 93768991.60402009,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 1.2128923676073177e-14,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5375748502994013,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Flow-law point: stress=1000000.0 Pa, E=405000.0 J/kg, p=45000000.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_arr.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000000.0,
+            "E": 405000.0,
+            "p": 45000000.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 1.2128923676073177e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 93768991.60402009,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 8.561012525185372e-13,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9551797145385751,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_5",
+          "description": "Flow-law point: stress=1000.0 Pa, E=280000.0 J/kg, p=20000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arr.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 280000.0,
+            "p": 20000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 1.2128923676073177e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 93768991.60402009,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 1.040083296310158e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 271.57,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5527288815526822,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "FlowLawArrheniusWarm": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "stress": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "effective stress"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "gs": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.001,
+          "description": "grain size (unused by this law)"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant (constants.ideal_gas_constant)"
+        },
+        "A_warm": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 1730.0,
+          "description": "Arrhenius warm-case softness prefactor (flow_law.Paterson_Budd.A_warm)"
+        },
+        "Q_warm": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 139000.0,
+          "description": "Arrhenius warm-case activation energy (flow_law.Paterson_Budd.Q_warm)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p)"
+        },
+        "softness": {
+          "type": "unknown",
+          "units": "Pa^-3/s",
+          "description": "ice softness A (computed from T_pa)"
+        },
+        "hardness": {
+          "type": "unknown",
+          "units": "Pa s^(1/3)",
+          "description": "ice hardness B = A^(-1/n)"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "flow factor A*sigma^(n-1)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "PatersonBuddWarm::softness_from_temp (softness uses T_pa)",
+          "lhs": "softness",
+          "rhs": {
+            "op": "arrhenius_softness",
+            "args": [
+              "A_warm",
+              "Q_warm",
+              "T_pa"
+            ]
+          }
+        },
+        {
+          "_comment": "FlowLaw::hardness_impl",
+          "lhs": "hardness",
+          "rhs": {
+            "op": "hardness_from_softness",
+            "args": [
+              "softness",
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "PatersonBuddWarm::flow_from_temp ignores pressure and uses the NON-pressure-adjusted temperature",
+          "lhs": "flow",
+          "rhs": {
+            "op": "flow_power_law",
+            "args": [
+              {
+                "op": "arrhenius_softness",
+                "args": [
+                  "A_warm",
+                  "Q_warm",
+                  "T"
+                ]
+              },
+              "stress",
+              "n"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arrwarm.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 5.0297896457021556e-30,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 5836467333.887968,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 5.029789645702156e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Flow-law point: stress=1000.0 Pa, E=95000.0 J/kg, p=45000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arrwarm.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 95000.0,
+            "p": 45000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 4.5429992144641284e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 2.0269248269730464e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Flow-law point: stress=100000.0 Pa, E=280000.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arrwarm.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 100000.0,
+            "E": 280000.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 4.5429992144641284e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 4.5429992144641285e-14,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5375748502994013,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Flow-law point: stress=1000000.0 Pa, E=405000.0 J/kg, p=45000000.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_arrwarm.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000000.0,
+            "E": 405000.0,
+            "p": 45000000.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 4.5429992144641284e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 2.0269248269730463e-12,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9551797145385751,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_5",
+          "description": "Flow-law point: stress=1000.0 Pa, E=280000.0 J/kg, p=20000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_arrwarm.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 280000.0,
+            "p": 20000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 4.5429992144641284e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.1819662379340724e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 271.57,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5527288815526822,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "FlowLawGPBLD": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "stress": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "effective stress"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "gs": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.001,
+          "description": "grain size (unused by this law)"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant (constants.ideal_gas_constant)"
+        },
+        "A_cold": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 3.61e-13,
+          "description": "Paterson-Budd cold-branch softness prefactor (flow_law.Paterson_Budd.A_cold)"
+        },
+        "A_warm": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 1730.0,
+          "description": "Paterson-Budd warm-branch softness prefactor (flow_law.Paterson_Budd.A_warm)"
+        },
+        "Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "Paterson-Budd cold-branch activation energy (flow_law.Paterson_Budd.Q_cold)"
+        },
+        "Q_warm": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 139000.0,
+          "description": "Paterson-Budd warm-branch activation energy (flow_law.Paterson_Budd.Q_warm)"
+        },
+        "T_critical": {
+          "type": "parameter",
+          "units": "K",
+          "default": 263.15,
+          "description": "Paterson-Budd cold/warm transition temperature (flow_law.Paterson_Budd.T_critical)"
+        },
+        "water_frac_coeff": {
+          "type": "parameter",
+          "units": "1",
+          "default": 181.25,
+          "description": "GPBLD water-fraction coefficient (flow_law.gpbld.water_frac_coeff)"
+        },
+        "water_frac_observed_limit": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.01,
+          "description": "GPBLD observed water-fraction cap (flow_law.gpbld.water_frac_observed_limit)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p)"
+        },
+        "E_cts": {
+          "type": "unknown",
+          "units": "J/kg",
+          "description": "cold-temperate transition enthalpy E_s(p)"
+        },
+        "softness": {
+          "type": "unknown",
+          "units": "Pa^-3/s",
+          "description": "ice softness A"
+        },
+        "hardness": {
+          "type": "unknown",
+          "units": "Pa s^(1/3)",
+          "description": "ice hardness B = A^(-1/n)"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "flow factor A*sigma^(n-1)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::enthalpy_cts",
+          "lhs": "E_cts",
+          "rhs": {
+            "op": "cold_temperate_enthalpy",
+            "args": [
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "GPBLD::softness_impl: cold ice uses Paterson-Budd at T_pa; temperate ice uses Paterson-Budd at the melting point times (1 + C*min(omega, omega_observed_limit))",
+          "lhs": "softness",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": "<",
+                "args": [
+                  "E",
+                  "E_cts"
+                ]
+              },
+              {
+                "op": "pb_softness",
+                "args": [
+                  "T_pa"
+                ]
+              },
+              {
+                "op": "gpbld_temperate_softness",
+                "args": [
+                  "omega"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "FlowLaw::hardness_impl",
+          "lhs": "hardness",
+          "rhs": {
+            "op": "hardness_from_softness",
+            "args": [
+              "softness",
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "FlowLaw::flow_impl (softness times sigma^(n-1))",
+          "lhs": "flow",
+          "rhs": {
+            "op": "flow_power_law",
+            "args": [
+              "softness",
+              "stress",
+              "n"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_gpbld.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 3.258190201647245e-27,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 674540228.7500812,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 3.258190201647245e-21,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Flow-law point: stress=1000.0 Pa, E=95000.0 J/kg, p=45000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_gpbld.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 95000.0,
+            "p": 45000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 8.812520609799048e-24,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 48413515.32736652,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 8.812520609799049e-18,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Flow-law point: stress=100000.0 Pa, E=280000.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_gpbld.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 100000.0,
+            "E": 280000.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 1.2777185290680361e-23,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 42774827.720227085,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 1.277718529068036e-13,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5375748502994013,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Flow-law point: stress=1000000.0 Pa, E=405000.0 J/kg, p=45000000.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_gpbld.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000000.0,
+            "E": 405000.0,
+            "p": 45000000.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 1.2777185290680361e-23,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 42774827.720227085,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 1.2777185290680362e-11,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9551797145385751,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "FlowLawHooke": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "stress": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "effective stress"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "gs": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.001,
+          "description": "grain size (unused by this law)"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant (constants.ideal_gas_constant)"
+        },
+        "A_Hooke": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 4.42165e-09,
+          "description": "Hooke softness prefactor (flow_law.Hooke.A)"
+        },
+        "Q_Hooke": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 78800.0,
+          "description": "Hooke activation energy (flow_law.Hooke.Q)"
+        },
+        "C_Hooke": {
+          "type": "parameter",
+          "units": "K^1.17",
+          "default": 0.16612,
+          "description": "Hooke exponent prefactor (flow_law.Hooke.C)"
+        },
+        "Tr_Hooke": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.39,
+          "description": "Hooke reference temperature (flow_law.Hooke.Tr)"
+        },
+        "k_Hooke": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.17,
+          "description": "Hooke exponent (flow_law.Hooke.k)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p)"
+        },
+        "softness": {
+          "type": "unknown",
+          "units": "Pa^-3/s",
+          "description": "ice softness A"
+        },
+        "hardness": {
+          "type": "unknown",
+          "units": "Pa s^(1/3)",
+          "description": "ice hardness B = A^(-1/n)"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "flow factor A*sigma^(n-1)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "Hooke::softness_from_temp (uses T_pa)",
+          "lhs": "softness",
+          "rhs": {
+            "op": "hooke_softness",
+            "args": [
+              "T_pa"
+            ]
+          }
+        },
+        {
+          "_comment": "FlowLaw::hardness_impl",
+          "lhs": "hardness",
+          "rhs": {
+            "op": "hardness_from_softness",
+            "args": [
+              "softness",
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "PatersonBudd::flow_impl (flow uses the pressure-adjusted temperature)",
+          "lhs": "flow",
+          "rhs": {
+            "op": "flow_power_law",
+            "args": [
+              "softness",
+              "stress",
+              "n"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_hooke.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 1.5945845598209969e-27,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 855954767.3797207,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 1.5945845598209969e-21,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Flow-law point: stress=1000.0 Pa, E=95000.0 J/kg, p=45000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_hooke.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 95000.0,
+            "p": 45000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 5.323970912662052e-23,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 26582027.84813068,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 5.323970912662052e-17,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Flow-law point: stress=100000.0 Pa, E=280000.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_hooke.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 100000.0,
+            "E": 280000.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 5.323970912662052e-23,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 26582027.84813068,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 5.323970912662052e-13,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5375748502994013,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Flow-law point: stress=1000000.0 Pa, E=405000.0 J/kg, p=45000000.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_hooke.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000000.0,
+            "E": 405000.0,
+            "p": 45000000.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "softness",
+              "time": 0.0,
+              "expected": 5.323970912662052e-23,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 26582027.84813068,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 5.323970912662052e-11,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9551797145385751,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-10
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "FlowLawGoldsbyKohlstedt": {
+      "expression_template_imports": [
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "stress": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "effective stress"
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 0.0,
+          "description": "ice enthalpy"
+        },
+        "p": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "ice pressure"
+        },
+        "gs": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.001,
+          "description": "grain size"
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent used for the hardness factor (stress_balance.sia.Glen_exponent)"
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "specific heat capacity of ice (constants.ice.specific_heat_capacity)"
+        },
+        "c_water": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 4170.0,
+          "description": "specific heat capacity of fresh water (constants.fresh_water.specific_heat_capacity)"
+        },
+        "L_0": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "reference temperature (enthalpy_converter.T_reference)"
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "ideal gas constant (constants.ideal_gas_constant)"
+        },
+        "A_cold": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 3.61e-13,
+          "description": "Paterson-Budd cold-branch softness prefactor (flow_law.Paterson_Budd.A_cold)"
+        },
+        "A_warm": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 1730.0,
+          "description": "Paterson-Budd warm-branch softness prefactor (flow_law.Paterson_Budd.A_warm)"
+        },
+        "Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "Paterson-Budd cold-branch activation energy (flow_law.Paterson_Budd.Q_cold)"
+        },
+        "Q_warm": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 139000.0,
+          "description": "Paterson-Budd warm-branch activation energy (flow_law.Paterson_Budd.Q_warm)"
+        },
+        "T_critical": {
+          "type": "parameter",
+          "units": "K",
+          "default": 263.15,
+          "description": "Paterson-Budd cold/warm transition temperature (flow_law.Paterson_Budd.T_critical)"
+        },
+        "V_act_vol": {
+          "type": "parameter",
+          "units": "m^3/mol",
+          "default": -1.3e-05,
+          "description": "GK activation volume (GoldsbyKohlstedt::m_V_act_vol)"
+        },
+        "disl_A_cold": {
+          "type": "parameter",
+          "units": "Pa^-4/s",
+          "default": 4e-19,
+          "description": "GK dislocation-creep cold prefactor (GoldsbyKohlstedt::m_disl_A_cold)"
+        },
+        "disl_A_warm": {
+          "type": "parameter",
+          "units": "Pa^-4/s",
+          "default": 60000.0,
+          "description": "GK dislocation-creep warm prefactor (GoldsbyKohlstedt::m_disl_A_warm)"
+        },
+        "disl_n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 4.0,
+          "description": "GK dislocation-creep stress exponent (GoldsbyKohlstedt::m_disl_n)"
+        },
+        "disl_Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "GK dislocation-creep cold activation energy (GoldsbyKohlstedt::m_disl_Q_cold)"
+        },
+        "disl_Q_warm": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 180000.0,
+          "description": "GK dislocation-creep warm activation energy (GoldsbyKohlstedt::m_disl_Q_warm)"
+        },
+        "disl_crit_temp": {
+          "type": "parameter",
+          "units": "K",
+          "default": 258.0,
+          "description": "GK dislocation-creep cold/warm transition temperature (GoldsbyKohlstedt::m_disl_crit_temp)"
+        },
+        "gbs_A_cold": {
+          "type": "parameter",
+          "units": "Pa^-1.8 m^1.4 / s",
+          "default": 6.1811e-14,
+          "description": "GK grain-boundary-sliding cold prefactor (GoldsbyKohlstedt::m_gbs_A_cold)"
+        },
+        "gbs_A_warm": {
+          "type": "parameter",
+          "units": "Pa^-1.8 m^1.4 / s",
+          "default": 4754700000000000.0,
+          "description": "GK grain-boundary-sliding warm prefactor (GoldsbyKohlstedt::m_gbs_A_warm)"
+        },
+        "gbs_n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.8,
+          "description": "GK grain-boundary-sliding stress exponent (GoldsbyKohlstedt::m_gbs_n)"
+        },
+        "gbs_Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 49000.0,
+          "description": "GK grain-boundary-sliding cold activation energy (GoldsbyKohlstedt::m_gbs_Q_cold)"
+        },
+        "gbs_Q_warm": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 192000.0,
+          "description": "GK grain-boundary-sliding warm activation energy (GoldsbyKohlstedt::m_gbs_Q_warm)"
+        },
+        "gbs_crit_temp": {
+          "type": "parameter",
+          "units": "K",
+          "default": 255.0,
+          "description": "GK grain-boundary-sliding cold/warm transition temperature (GoldsbyKohlstedt::m_gbs_crit_temp)"
+        },
+        "p_grain_sz_exp": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.4,
+          "description": "GK grain-size exponent (GoldsbyKohlstedt::m_p_grain_sz_exp)"
+        },
+        "basal_A": {
+          "type": "parameter",
+          "units": "Pa^-2.4/s",
+          "default": 2.1896e-07,
+          "description": "GK basal-slip prefactor (GoldsbyKohlstedt::m_basal_A)"
+        },
+        "basal_n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.4,
+          "description": "GK basal-slip stress exponent (GoldsbyKohlstedt::m_basal_n)"
+        },
+        "basal_Q": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "GK basal-slip activation energy (GoldsbyKohlstedt::m_basal_Q)"
+        },
+        "diff_crit_temp": {
+          "type": "parameter",
+          "units": "K",
+          "default": 258.0,
+          "description": "GK diffusional-flow Coble-scaling transition temperature (GoldsbyKohlstedt::m_diff_crit_temp)"
+        },
+        "diff_V_m": {
+          "type": "parameter",
+          "units": "m^3/mol",
+          "default": 1.97e-05,
+          "description": "GK molar volume (GoldsbyKohlstedt::m_diff_V_m)"
+        },
+        "diff_D_0v": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 0.00091,
+          "description": "GK volume-diffusion prefactor (GoldsbyKohlstedt::m_diff_D_0v)"
+        },
+        "diff_Q_v": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 59400.0,
+          "description": "GK volume-diffusion activation energy (GoldsbyKohlstedt::m_diff_Q_v)"
+        },
+        "diff_D_0b": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 0.00058,
+          "description": "GK grain-boundary-diffusion prefactor (GoldsbyKohlstedt::m_diff_D_0b)"
+        },
+        "diff_Q_b": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 49000.0,
+          "description": "GK grain-boundary-diffusion activation energy (GoldsbyKohlstedt::m_diff_Q_b)"
+        },
+        "diff_delta": {
+          "type": "parameter",
+          "units": "m",
+          "default": 9.04e-10,
+          "description": "GK grain-boundary width (GoldsbyKohlstedt::m_diff_delta)"
+        },
+        "T": {
+          "type": "unknown",
+          "units": "K",
+          "description": "absolute ice temperature T(E,p)"
+        },
+        "T_pa": {
+          "type": "unknown",
+          "units": "K",
+          "description": "pressure-adjusted temperature T_pa(E,p) (the temperature used by the GK strain-rate terms)"
+        },
+        "omega": {
+          "type": "unknown",
+          "units": "1",
+          "description": "liquid water fraction omega(E,p)"
+        },
+        "is_temperate": {
+          "type": "unknown",
+          "units": "1",
+          "description": "1 if E >= E_s(p)"
+        },
+        "hardness": {
+          "type": "unknown",
+          "units": "Pa s^(1/3)",
+          "description": "ice hardness B = A^(-1/n) with the Paterson-Budd softness at T_pa (GoldsbyKohlstedt::hardness_impl)"
+        },
+        "eps_diff": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "GK diffusional-flow contribution"
+        },
+        "eps_disl": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "GK dislocation-creep contribution"
+        },
+        "eps_basal": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "GK basal-slip contribution"
+        },
+        "eps_gbs": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "GK grain-boundary-sliding contribution"
+        },
+        "flow": {
+          "type": "unknown",
+          "units": "Pa^-1/s",
+          "description": "GK hybrid flow factor"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "EnthalpyConverter::temperature",
+          "lhs": "T",
+          "rhs": {
+            "op": "enthalpy_to_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::pressure_adjusted_temperature",
+          "lhs": "T_pa",
+          "rhs": {
+            "op": "pressure_adjusted_temperature",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::water_fraction",
+          "lhs": "omega",
+          "rhs": {
+            "op": "water_fraction",
+            "args": [
+              "E",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "EnthalpyConverter::is_temperate",
+          "lhs": "is_temperate",
+          "rhs": {
+            "op": ">=",
+            "args": [
+              "E",
+              {
+                "op": "cold_temperate_enthalpy",
+                "args": [
+                  "p"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "GoldsbyKohlstedt::hardness_impl (Paterson-Budd softness at T_pa)",
+          "lhs": "hardness",
+          "rhs": {
+            "op": "hardness_from_softness",
+            "args": [
+              {
+                "op": "pb_softness",
+                "args": [
+                  "T_pa"
+                ]
+              },
+              "n"
+            ]
+          }
+        },
+        {
+          "_comment": "GoldsbyKohlstedt::flow_from_temp, diffusional flow (temperature used is T_pa = temp + beta*p)",
+          "lhs": "eps_diff",
+          "rhs": {
+            "op": "gk_diffusional_strain_rate",
+            "args": [
+              "stress",
+              "T_pa",
+              "gs"
+            ]
+          }
+        },
+        {
+          "_comment": "GoldsbyKohlstedt::flow_from_temp, dislocation creep",
+          "lhs": "eps_disl",
+          "rhs": {
+            "op": "gk_dislocation_strain_rate",
+            "args": [
+              "stress",
+              "T_pa",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "GoldsbyKohlstedt::flow_from_temp, basal slip",
+          "lhs": "eps_basal",
+          "rhs": {
+            "op": "gk_basal_strain_rate",
+            "args": [
+              "stress",
+              "T_pa",
+              "p"
+            ]
+          }
+        },
+        {
+          "_comment": "GoldsbyKohlstedt::flow_from_temp, grain-boundary sliding",
+          "lhs": "eps_gbs",
+          "rhs": {
+            "op": "gk_gbs_strain_rate",
+            "args": [
+              "stress",
+              "T_pa",
+              "p",
+              "gs"
+            ]
+          }
+        },
+        {
+          "_comment": "GoldsbyKohlstedt::flow_from_temp, total (zero below |stress| < 1e-10)",
+          "lhs": "flow",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": "<",
+                "args": [
+                  {
+                    "op": "abs",
+                    "args": [
+                      "stress"
+                    ]
+                  },
+                  1e-10
+                ]
+              },
+              0.0,
+              {
+                "op": "+",
+                "args": [
+                  "eps_diff",
+                  "eps_disl",
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          "eps_basal",
+                          "eps_gbs"
+                        ]
+                      },
+                      {
+                        "op": "+",
+                        "args": [
+                          "eps_basal",
+                          "eps_gbs"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tuple_1",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_gk.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 674540228.7500812,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 5.8763057376314714e-18,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_2",
+          "description": "Flow-law point: stress=1000.0 Pa, E=95000.0 J/kg, p=45000000.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_gk.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 95000.0,
+            "p": 45000000.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 5.2970282563825745e-15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.005185116483664463,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_3",
+          "description": "Flow-law point: stress=100000.0 Pa, E=280000.0 J/kg, p=0.0 Pa, grain size=0.001 m (stage1/dumps/rheology/flowlaw_gk.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 100000.0,
+            "E": 280000.0,
+            "p": 0.0,
+            "gs": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 1.4616769032013462e-13,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.5375748502994013,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_4",
+          "description": "Flow-law point: stress=1000000.0 Pa, E=405000.0 J/kg, p=45000000.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_gk.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000000.0,
+            "E": 405000.0,
+            "p": 45000000.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 60378981.02086895,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 2.9913082950648655e-12,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 269.59499999999997,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 273.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.9551797145385751,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_5",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.0001 m (stage1/dumps/rheology/flowlaw_gk.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.0001
+          },
+          "assertions": [
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 674540228.7500812,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 5.211551304602894e-16,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_6",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.003 m (stage1/dumps/rheology/flowlaw_gk.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.003
+          },
+          "assertions": [
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 674540228.7500812,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 7.406421439868798e-19,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            }
+          ]
+        },
+        {
+          "id": "tuple_7",
+          "description": "Flow-law point: stress=1000.0 Pa, E=0.0 J/kg, p=0.0 Pa, grain size=0.01 m (stage1/dumps/rheology/flowlaw_gk.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "stress": 1000.0,
+            "E": 0.0,
+            "p": 0.0,
+            "gs": 0.01
+          },
+          "assertions": [
+            {
+              "variable": "hardness",
+              "time": 0.0,
+              "expected": 674540228.7500812,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "flow",
+              "time": 0.0,
+              "expected": 8.379910040744196e-20,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "T_pa",
+              "time": 0.0,
+              "expected": 223.15,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "omega",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            },
+            {
+              "variable": "is_temperate",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-09
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
