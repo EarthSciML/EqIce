@@ -1,0 +1,704 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ssa",
+    "description": "PISM shallow-shelf-approximation (SSA) stress-balance component (stage 2 of the eqice project), flow-line form of the PISM verification test V (van der Veen / CFBC shelf): the membrane momentum balance div(4*nu*H*grad u) = rho*g*H*h_x on the 1-D shelf of instrument_ssa.cc, with the SSAFD (PISM) face evaluation of the flux coefficient, the Dirichlet inflow (u = V0 at the left wall, the PISM bc_mask identity row), and the calving-front stress boundary condition (the east-face flux prescribed to delta_p = H*(0.5*rho_i*g*H - P_water), PISM's CFBC). Because the harness cannot solve the implicit/elliptic steady problem directly, the steady SSAFD operator is relaxed by a pseudo-transient: du/dt = U_char*(fluxdiv - rho*g*H*h_x)/(rho*g*H) with U_char a relaxation velocity scale, the Dirichlet row replaced by the penalty du1/dt = (V0 - u1)/tau_dir (u1 = V0 exactly at steady state), and the front row carrying the prescribed flux; the pseudo-time t is DIMENSIONLESS (du/dt then has velocity units, consistent with the right-hand side), and the diffusion time scale L^2/kappa with kappa = U_char*4*nu/(rho*g) is about 3 (dome) to 1e-6 (front-cell penalty) pseudo-time units. t_end = 100 covers ~35 slowest-mode decay times (the fixed point is reached to machine precision by t ~ 30), which is the practical ceiling of the harness's diffsol integration: its finite-difference-Jacobian Newton solver fails past t ~ 108 (BDF, the default) / 290 (SDIRK) pseudo-time units once the solution sits at the fixed point (documented in PROGRESS.md); the measured steady-state residual is 2e-9 to 6e-7 Pa. All shared math is imported by reference from ./ssa_templates.esm (the SSAFD divergence rule, the face stiffness, the surface-gradient rule) and ./ice_rheology_templates.esm (effective_viscosity). The state is the exact test-V shelf: H from the instrumented PISM v2.3.2 run (stage1/dumps/ssa/columns.csv), tau_b = 0 (floating shelf, tauc = 0), isothermal-Glen B = 1.9e8 (dump Bbar), and the Schoof regularization gamma_0 = (1 m/yr / 1000 km)^2 (flow_law.Schoof_regularizing_velocity/length with the 31556926 s year). The steady state reproduces PISM's Picard-converged dump columns u, nuH (faces) and taud_x. Deferred to later stages: the full 2-D SSA (y-momentum, v, the cross-coupling terms of SSAFDBase::assemble_matrix), basal drag (tau_b = beta*u, plastic/pseudo-plastic laws; the beta row is trivial to add to the rule), and the Picard/KSP solver used by the C++ model (the pseudo-transient reaches the same fixed point)."
+  },
+  "solver": {
+    "stiffness": "high",
+    "reltol": 1e-10,
+    "abstol": 1e-13
+  },
+  "models": {
+    "SSAFlowline": {
+      "expression_template_imports": [
+        {
+          "ref": "./ssa_templates.esm"
+        },
+        {
+          "ref": "./ice_rheology_templates.esm"
+        }
+      ],
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["x"],
+          "description": "Horizontal ice velocity x-component on the flow-line grid (cell centers i = 1..N; cell i corresponds to dump cell i-1 of stage1/dumps/ssa/columns.csv)."
+        },
+        "H": {
+          "type": "parameter",
+          "units": "m",
+          "shape": ["x"],
+          "default": [600, 462.79824258306877, 408.58461959004774, 376.12729120795785, 353.48826999050425, 336.35323274657657, 322.70245734098557, 311.43775653382204, 301.8998864305961, 293.66409549328773, 286.44175299914798, 280.02839819202597, 274.27427296392614, 269.06663252974539, 264.31862467019556, 259.96202493231181, 255.94233438115356, 252.2153784148945, 248.74488952906327, 245.50075280162073, 242.45770849944103, 239.59437670720467, 236.89251311000208, 234.33643352341332, 231.9125635015333, 229.60908194267608, 227.41563622944929, 225.32311243819512, 223.32344839307663, 221.40948038027159, 219.57481654604493, 217.81373162593906, 216.12107885921975, 214.49221584928102, 212.92294181829115, 211.40944423057874, 209.94825316540093, 208.53620213569653, 207.17039429707376, 205.84817318674794, 204.56709728745656, 203.32491783555551, 202.11955939237848, 200.94910277872577, 199.81177003804092, 198.70591114752412, 197.62999224052672, 196.58258513995108, 195.56235803252929, 194.56806713894289, 193.598549255709, 192.65271506233958, 191.72954310208274, 190.82807435705908, 189.94740734920541, 189.08669370745309, 188.24513414925818, 187.42197483118036, 186.61650402885596, 185.82804911156762],
+          "description": "Ice thickness (the exact test-V shelf state of the instrumented run, stage1/dumps/ssa/columns.csv column H, j=0 row; dump cell i is index i+1)."
+        },
+        "rho_ice": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "Ice density (constants.ice.density)."
+        },
+        "rho_water": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 1028.0,
+          "description": "Sea-water density (constants.sea_water.density)."
+        },
+        "g": {
+          "type": "parameter",
+          "units": "m/s^2",
+          "default": 9.81,
+          "description": "Standard gravity (constants.standard_gravity)."
+        },
+        "B": {
+          "type": "parameter",
+          "units": "Pa s^(1/3)",
+          "default": 1.9e8,
+          "description": "Ice hardness of the isothermal-Glen flow law (flow_law.isothermal_Glen.ice_softness^(-1/n); the dump Bbar column reads 189999999.99999979)."
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.ssa.Glen_exponent)."
+        },
+        "gamma_0": {
+          "type": "parameter",
+          "units": "1/s^2",
+          "default": 1.004177802851038e-27,
+          "description": "Schoof regularization strain-rate squared gamma_0 = (1 m/yr / 1000 km)^2 with the 31556926 s year (flow_law.Schoof_regularizing_velocity=1 m/yr, Schoof_regularizing_length=1000 km; FlowLaw.cc m_schoofReg)."
+        },
+        "epsilon": {
+          "type": "parameter",
+          "units": "Pa s m",
+          "default": 10000000000000.0,
+          "description": "nuH regularization added to nu*H to keep it away from zero (stress_balance.ssa.epsilon)."
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "m",
+          "default": 8196.721311475410,
+          "description": "Grid spacing of the instrumented run: 500000 m / 61 cells (grid.dx). The 60-cell shelf grid of this model keeps the PISM cell centers: my cell i sits at dump cell i-1's center."
+        },
+        "V0": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 9.5066293922455477e-06,
+          "description": "Prescribed inflow velocity at the left wall (300 m/yr in the instrumented run; the bc_values of cell 0). At steady state the penalty row forces u[1] = V0 exactly, matching the PISM identity row."
+        },
+        "U_char": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1.0,
+          "description": "Pseudo-transient relaxation velocity scale: du/dt = U_char*(fluxdiv - rho*g*H*h_x)/(rho*g*H). Larger U_char relaxes faster; the diffusion time scale of the slowest mode is L^2/(U_char*4*nu/(rho*g)) ~ 3 pseudo-time units at the dome, so t_end = 100 covers ~35 decay times."
+        },
+        "tau_dir": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.001,
+          "description": "Dirichlet penalty time constant (dimensionless pseudo-time): du[1]/dt = (V0 - u[1])/tau_dir drives u[1] to V0; the steady state is u[1] = V0 exactly for any tau_dir. tau_dir = 1e-3 keeps the penalty rate (1e3) comparable to the fastest physical mode so the boundary tracks the interior during the transient."
+        },
+        "bed": {
+          "type": "parameter",
+          "units": "m",
+          "default": -1000.0,
+          "description": "Bed elevation of the test-V shelf (flat, well below flotation so the whole shelf floats; flotation thickness is rho_w/rho_i*1000 = 1129.7 m > 600 m)."
+        },
+        "sea_level": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "Sea level of the instrumented run."
+        },
+        "surface": {
+          "type": "unknown",
+          "units": "m",
+          "shape": ["x"],
+          "description": "Ice surface elevation of the floating shelf: h = H*(1 - rho_ice/rho_water) + sea_level (bit-exact against the dump surface column)."
+        },
+        "h_x": {
+          "type": "unknown",
+          "units": "1",
+          "shape": ["x"],
+          "description": "Surface-gradient x-component with the SSAFD wall treatment (ssa_surface_gradient_x): centered interior, one-sided constant-extrapolation at the domain edges and the calving front."
+        },
+        "rho_g_H": {
+          "type": "unknown",
+          "units": "Pa",
+          "shape": ["x"],
+          "description": "Hydrostatic overburden rho_ice*g*H per cell (the normalization of the pseudo-transient and the factor of the driving stress)."
+        },
+        "taud_x": {
+          "type": "unknown",
+          "units": "Pa",
+          "shape": ["x"],
+          "description": "Driving stress x-component taud_x = -rho*g*H*h_x (PISM convention, compute_driving_stress; the dump column taud_x is reproduced to double precision)."
+        },
+        "k": {
+          "type": "unknown",
+          "units": "Pa s m",
+          "shape": ["x"],
+          "description": "Cell-centered membrane stiffness 4*(nu_0*H + epsilon) with nu_0 = 0.5*B*gamma_0^((1-n)/(2n)) the Schoof-regularized viscosity: the operator-form coefficient declared so the membrane divergence reads div(k*grad u) (the varcoeff-family match contract). The SSAFD divergence rule does NOT read k: PISM evaluates the flux coefficient at each FACE from face quantities (compute_nuH_cfbc), which is not the arithmetic mean of cell values -- see ssa_flowline_membrane_divergence in ssa_templates.esm."
+        },
+        "fluxdiv": {
+          "type": "unknown",
+          "units": "Pa",
+          "shape": ["x"],
+          "description": "Membrane divergence div(4*nu*H*grad u) = (flux_e - flux_w)/dx with the SSAFD face stiffnesses and the calving-front row (east-face flux prescribed to delta_p): the rewrite of D(k*D(u,x),x) by ssa_flowline_membrane_divergence."
+        },
+        "residual": {
+          "type": "unknown",
+          "units": "Pa",
+          "shape": ["x"],
+          "description": "Membrane balance residual fluxdiv - rho*g*H*h_x (zero at the steady state of the SSA, including the calving-front row; the Dirichlet cell's residual is not used by the dynamics). Asserted cell-by-cell at t_end as the steady-state convergence evidence."
+        },
+        "nuH_face": {
+          "type": "unknown",
+          "units": "Pa s m",
+          "shape": ["face"],
+          "description": "SSAFD nuH at the staggered faces: nu*H_face + epsilon with nu from the face strain rate (u[f+1]-u[f])/dx and H_face = (H[f]+H[f+1])/2 for faces 1..N-1; the calving-front face f=N has u_x = 0 (the neighbor is ice-free, compute_nuH_cfbc) and H_face = H[N], so nu is the Schoof-regularized value. Face f corresponds to the dump nuH column row f-1; face N to dump row 59 (the front)."
+        },
+        "flux_uH": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "shape": ["x"],
+          "description": "Ice flux u*H per cell. The van der Veen exact solution has u*H = V0*H0 (constant flux); the discrete SSAFD solution satisfies it to the PISM-vs-exact accuracy (~0.1%)."
+        },
+        "h_w": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Water-column height at the calving-front cell: max(sea_level - max(bed, sea_level - (rho_ice/rho_water)*H[N]), 0) (pism_utilities.cc average_water_column_pressure)."
+        },
+        "P_water": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Depth-averaged sea-water pressure at the calving-front cell: 0.5*rho_water*g*h_w^2/H[N] (average_water_column_pressure)."
+        },
+        "delta_p": {
+          "type": "unknown",
+          "units": "Pa m",
+          "description": "Calving-front pressure difference delta_p = H[N]*(0.5*rho_ice*g*H[N] - P_water) (SSAFDBase::assemble_rhs), the flux prescribed through the front face. For this floating shelf it reduces to 0.5*rho_ice*g*(1 - rho_ice/rho_water)*H[N]^2 and equals the exact front flux 2*B*C^(1/3)*H[N]^2 ~ 1.769e7 Pa m at H[N] = 185.83 m."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Initial condition: the van der Veen exact solution u = Q0*(4*C/Q0*X + H0^-4)^(1/4) with X = (i-1)*dx measured from the dump cell 0 center (grid.x(0); the instrument's H_exact argument x - x_min), Q0 = V0*H0, C = 2.45e-18, H0 = 600 m. Spelled from literals and the metaparameter N alone (build-time scope; the runtime parameters H, V0, ... are not visible here). A warm start: the exact shape is within ~0.1% of the discrete steady state, so the pseudo-transient only removes the discretization error.",
+          "lhs": {
+            "op": "ic",
+            "args": ["u"]
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": [],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                5.7039776353473284e-03,
+                {
+                  "op": "^",
+                  "args": [
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            4.0,
+                            2.45e-18,
+                            {
+                              "op": "/",
+                              "args": [
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    { "op": "-", "args": ["i", 1.0] },
+                                    8196.721311475410
+                                  ]
+                                },
+                                5.7039776353473284e-03
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "^",
+                          "args": [600.0, -4.0]
+                        }
+                      ]
+                    },
+                    0.25
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Pseudo-transient relaxation of the SSAFD membrane balance: at cell 1 the Dirichlet penalty row (u[1] -> V0, exactly V0 at steady state, matching the PISM bc_mask identity row); elsewhere du/dt = U_char*(fluxdiv - rho*g*H*h_x)/(rho*g*H), whose steady state is the discrete SSA div(4*nu*H*grad u) = rho*g*H*h_x with the calving-front flux row inside fluxdiv. The sign makes the relaxation a forward (stable) diffusion in u; time is dimensionless.",
+          "lhs": {
+            "op": "D",
+            "args": ["u"],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": [],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                { "op": "==", "args": ["i", 1] },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": ["V0", { "op": "index", "args": ["u", "i"] }]
+                    },
+                    "tau_dir"
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "U_char",
+                        {
+                          "op": "-",
+                          "args": [
+                            { "op": "index", "args": ["fluxdiv", "i"] },
+                            {
+                              "op": "*",
+                              "args": [
+                                { "op": "index", "args": ["rho_g_H", "i"] },
+                                { "op": "index", "args": ["h_x", "i"] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    { "op": "index", "args": ["rho_g_H", "i"] }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Surface elevation of the floating shelf h = H*(1 - rho_ice/rho_water) (bit-exact against the dump surface column; bed -1000 m and sea level 0 keep the whole shelf afloat, so the geometry update's floating branch applies everywhere).",
+          "lhs": "surface",
+          "rhs": {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": [],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["H", "i"] },
+                { "op": "-", "args": [1.0, { "op": "/", "args": ["rho_ice", "rho_water"] }] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Surface gradient with the SSAFD wall treatment (constant-extrapolation ghosts at both ends and at the calving front).",
+          "lhs": "h_x",
+          "rhs": {
+            "op": "ssa_surface_gradient_x",
+            "args": ["surface"]
+          }
+        },
+        {
+          "_comment": "Hydrostatic overburden rho_ice*g*H (the pseudo-transient normalization and the driving-stress factor).",
+          "lhs": "rho_g_H",
+          "rhs": {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": [],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "*",
+              "args": ["rho_ice", "g", { "op": "index", "args": ["H", "i"] }]
+            }
+          }
+        },
+        {
+          "_comment": "Driving stress taud_x = -rho*g*H*h_x (PISM convention; the dump column taud_x). Array-level (elementwise) form for the same reason as residual: the native compiler's build-time evaluation of the initial-condition scope takes faqs that gather parameter/const arrays, but not faqs that gather other observed arrays (rho_g_H, h_x), and would refuse the per-cell walk.",
+          "lhs": "taud_x",
+          "rhs": {
+            "op": "-",
+            "args": [
+              { "op": "*", "args": ["rho_g_H", "h_x"] }
+            ]
+          }
+        },
+        {
+          "_comment": "Operator-form coefficient k = 4*(nu_0*H + epsilon) with nu_0 the Schoof-regularized viscosity (see the variable description: the SSAFD divergence rule evaluates the flux coefficient at faces and does not read k; k exists to write the membrane divergence as div(k*grad u)).",
+          "lhs": "k",
+          "rhs": {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": [],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                4.0,
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "effective_viscosity",
+                          "args": ["B", 0.0, "gamma_0", "n"]
+                        },
+                        { "op": "index", "args": ["H", "i"] }
+                      ]
+                    },
+                    "epsilon"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Membrane divergence with the SSAFD face stiffnesses and boundary rows: the rule ssa_flowline_membrane_divergence rewrites this D(k*D(u,x),x) compound (priority 10) into the face-flux-difference stencil with the calving-front prescribed-flux row.",
+          "lhs": "fluxdiv",
+          "rhs": {
+            "op": "D",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  { "op": "D", "args": ["u"], "wrt": "x" }
+                ]
+              }
+            ],
+            "wrt": "x"
+          }
+        },
+        {
+          "_comment": "Membrane balance residual fluxdiv - rho*g*H*h_x per cell (zero at the steady state, including the front row). Written as an array-level expression rather than a faq: the native compiler's build-time state-free analysis of the initial-condition scope collects only the names appearing in a body, so a faq reading fluxdiv (a rule output that depends on the state u, hence not in the build-time scope) would be classified as a static observed and refused when the per-cell walk cannot resolve it; the array-level form simply does not evaluate at build time, is skipped, and is then evaluated per step with the other observed rules.",
+          "lhs": "residual",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "fluxdiv",
+              { "op": "*", "args": ["rho_g_H", "h_x"] }
+            ]
+          }
+        },
+        {
+          "_comment": "nuH at the staggered faces: nu(u_x^2)*H_face + epsilon with u_x = (u[i+1]-u[i])/dx and H_face = (H[i]+H[i+1])/2 over the interior faces 1..N-1, and the calving-front face N with u_x = 0 (the neighbor is ice-free, so compute_nuH_cfbc sets the face strain rate to 0) and H_face = H[N]. Written as a positional makearray (plain integer ranges, the unclaimed-symbol form the native compiler requires for index maps into x-shaped fields) rather than a faq over the face index set, because reading an x-shaped array by a face-set symbol is a cross-axis map the native compiler refuses.",
+          "lhs": "nuH_face",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [[1, { "op": "-", "args": ["N", 1] }]],
+              [["N", "N"]]
+            ],
+            "values": [
+              {
+                "op": "faq",
+                "output_idx": ["i"],
+                "args": [],
+                "ranges": { "i": [1, { "op": "-", "args": ["N", 1] }] },
+                "expr": {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "effective_viscosity",
+                          "args": [
+                            "B",
+                            {
+                              "op": "^",
+                              "args": [
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        { "op": "index", "args": ["u", { "op": "+", "args": ["i", 1] }] },
+                                        { "op": "index", "args": ["u", "i"] }
+                                      ]
+                                    },
+                                    "dx"
+                                  ]
+                                },
+                                2.0
+                              ]
+                            },
+                            "gamma_0",
+                            "n"
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            0.5,
+                            {
+                              "op": "+",
+                              "args": [
+                                { "op": "index", "args": ["H", "i"] },
+                                { "op": "index", "args": ["H", { "op": "+", "args": ["i", 1] }] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "epsilon"
+                  ]
+                }
+              },
+              {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "effective_viscosity",
+                        "args": ["B", 0.0, "gamma_0", "n"]
+                      },
+                      { "op": "index", "args": ["H", "N"] }
+                    ]
+                  },
+                  "epsilon"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "Ice flux u*H per cell (the exact solution has u*H = V0*H0 = Q0, constant).",
+          "lhs": "flux_uH",
+          "rhs": {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": [],
+            "ranges": { "i": { "from": "x" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                { "op": "index", "args": ["u", "i"] },
+                { "op": "index", "args": ["H", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Water-column height at the calving-front cell (average_water_column_pressure): max(sea_level - max(bed, sea_level - (rho_ice/rho_water)*H[N]), 0).",
+          "lhs": "h_w",
+          "rhs": {
+            "op": "max",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "sea_level",
+                  {
+                    "op": "max",
+                    "args": [
+                      "bed",
+                      {
+                        "op": "-",
+                        "args": [
+                          "sea_level",
+                          {
+                            "op": "*",
+                            "args": [
+                              { "op": "/", "args": ["rho_ice", "rho_water"] },
+                              { "op": "index", "args": ["H", "N"] }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              0.0
+            ]
+          }
+        },
+        {
+          "_comment": "Depth-averaged sea-water pressure at the calving-front cell: 0.5*rho_water*g*h_w^2/H[N] (average_water_column_pressure).",
+          "lhs": "P_water",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "rho_water",
+                  "g",
+                  { "op": "^", "args": ["h_w", 2.0] }
+                ]
+              },
+              { "op": "index", "args": ["H", "N"] }
+            ]
+          }
+        },
+        {
+          "_comment": "Calving-front pressure difference delta_p = H[N]*(0.5*rho_ice*g*H[N] - P_water), the flux prescribed through the front face (SSAFDBase::assemble_rhs).",
+          "lhs": "delta_p",
+          "rhs": {
+            "op": "*",
+            "args": [
+              { "op": "index", "args": ["H", "N"] },
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [0.5, "rho_ice", "g", { "op": "index", "args": ["H", "N"] }]
+                  },
+                  "P_water"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "testV_warm_start_ic",
+          "description": "Pins the initial condition: u[ic] equals the van der Veen exact solution u = Q0*(4*C/Q0*X + H0^-4)^(1/4) with Q0 = V0*H0 = 5.7039776353473284e-03 m^2/s, C = 2.45e-18, H0 = 600 m, X = (i-1)*dx (stage1/dumps/ssa/columns.csv column u_exact; the expected literals are the dumped values, which agree with the spelled formula to ~1e-16 relative). Relative tolerance 1e-9 (the ic is evaluated by the runtime; the dump values were computed by C++ with the same formula).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            {
+              "variable": "u", "time": 0.0, "coords": { "x": 15 },
+              "expected": 2.1579930821993666e-05, "tolerance": { "rel": 1e-9 }
+            },
+            {
+              "variable": "u", "time": 0.0, "coords": { "x": 60 },
+              "expected": 3.0694922874225351e-05, "tolerance": { "rel": 1e-9 }
+            }
+          ]
+        },
+        {
+          "id": "testV_steady_state_ssafd",
+          "description": "Pseudo-transient relaxation to the steady SSAFD solution of the test-V shelf (t_end = 100 dimensionless pseudo-time units = ~35 slowest-mode decay times, so the fixed point is reached to machine precision by t ~ 30; the solver block requests the stiff family with reltol 1e-10/abstol 1e-13). The discrete steady state reproduces PISM's Picard-converged dump (stage1/dumps/ssa/columns.csv, j=0 rows; my cell i is dump cell i-1, my face f is dump row f-1, face 60 the front): the dumped u closes this model's discrete equations to ~0.1% of the local driving stress (the Picard stopping tolerance stress_balance.ssa.fd.relative_convergence = 1e-4 on the relative nuH change), which the conditioning of the SSAFD operator amplifies to a ~1.5e-3 relative spread in u between the dump and the true fixed point, so the u-vs-dump assertions use rel 2e-3; taud_x is pure geometry (given H) and reproduces the dump to double precision (rel 1e-10); nuH_face at the faces (the SSAFD nonlinearity, evaluated from the face strain rate) agrees to ~1.5e-3 (rel 2e-3), and the calving-front face (the Schoof-regularized constant) exactly (rel 1e-3); the van der Veen exact solution u_exact = Q0/H is reproduced within the SSAFD discretization error, 2.1e-3 at the front to 2.8e-3 at cell 15 (the Dirichlet cell 1 is exact by construction), asserted at rel 4e-3; the constant-flux identity u*H = Q0 holds to the same accuracy (rel 4e-3); the membrane balance residual fluxdiv - rho*g*H*h_x is below 1e-3 Pa in absolute value at every asserted interior/front cell at t_end (measured 2e-9 to 6e-7 Pa, i.e. solver-tolerance-limited, 7-12 orders below the local driving stress).",
+          "time_span": { "start": 0.0, "end": 100.0 },
+          "assertions": [
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 1 },
+              "expected": 9.5066293922455477e-06, "tolerance": { "rel": 1e-6 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 15 },
+              "expected": 2.161008568931253e-05, "tolerance": { "rel": 2e-3 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 30 },
+              "expected": 2.5784930700498497e-05, "tolerance": { "rel": 2e-3 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 45 },
+              "expected": 2.8565002781049688e-05, "tolerance": { "rel": 2e-3 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 60 },
+              "expected": 3.070983157258877e-05, "tolerance": { "rel": 2e-3 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 15 },
+              "expected": 2.1579930821993666e-05, "tolerance": { "rel": 4e-3 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 30 },
+              "expected": 2.5762120147478445e-05, "tolerance": { "rel": 4e-3 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 45 },
+              "expected": 2.8546754949727855e-05, "tolerance": { "rel": 4e-3 }
+            },
+            {
+              "variable": "u", "time": 100.0, "coords": { "x": 60 },
+              "expected": 3.0694922874225351e-05, "tolerance": { "rel": 4e-3 }
+            },
+            {
+              "variable": "taud_x", "time": 100.0, "coords": { "x": 1 },
+              "expected": 5145.6477400195763, "tolerance": { "rel": 1e-10 }
+            },
+            {
+              "variable": "taud_x", "time": 100.0, "coords": { "x": 15 },
+              "expected": 150.42434391594372, "tolerance": { "rel": 1e-10 }
+            },
+            {
+              "variable": "taud_x", "time": 100.0, "coords": { "x": 30 },
+              "expected": 51.879780570021985, "tolerance": { "rel": 1e-10 }
+            },
+            {
+              "variable": "taud_x", "time": 100.0, "coords": { "x": 45 },
+              "expected": 28.016673593789562, "tolerance": { "rel": 1e-10 }
+            },
+            {
+              "variable": "taud_x", "time": 100.0, "coords": { "x": 60 },
+              "expected": 9.1583505108665175, "tolerance": { "rel": 1e-10 }
+            },
+            {
+              "variable": "nuH_face", "time": 100.0, "coords": { "face": 15 },
+              "expected": 1.9969753571954218e+17, "tolerance": { "rel": 2e-3 }
+            },
+            {
+              "variable": "nuH_face", "time": 100.0, "coords": { "face": 30 },
+              "expected": 2.3736259127633197e+17, "tolerance": { "rel": 2e-3 }
+            },
+            {
+              "variable": "nuH_face", "time": 100.0, "coords": { "face": 45 },
+              "expected": 2.6263169133793962e+17, "tolerance": { "rel": 2e-3 }
+            },
+            {
+              "variable": "nuH_face", "time": 100.0, "coords": { "face": 60 },
+              "expected": 1.7629158397086063e+19, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "flux_uH", "time": 100.0, "coords": { "x": 15 },
+              "expected": 5.7039776353473284e-03, "tolerance": { "rel": 4e-3 }
+            },
+            {
+              "variable": "flux_uH", "time": 100.0, "coords": { "x": 60 },
+              "expected": 5.7039776353473284e-03, "tolerance": { "rel": 4e-3 }
+            },
+            {
+              "variable": "residual", "time": 100.0, "coords": { "x": 15 },
+              "expected": 0.0, "tolerance": { "abs": 1e-3 }
+            },
+            {
+              "variable": "residual", "time": 100.0, "coords": { "x": 30 },
+              "expected": 0.0, "tolerance": { "abs": 1e-3 }
+            },
+            {
+              "variable": "residual", "time": 100.0, "coords": { "x": 45 },
+              "expected": 0.0, "tolerance": { "abs": 1e-3 }
+            },
+            {
+              "variable": "residual", "time": 100.0, "coords": { "x": 60 },
+              "expected": 0.0, "tolerance": { "abs": 1e-3 }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

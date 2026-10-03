@@ -1,0 +1,282 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ssa_templates",
+    "description": "Expression-template library for the PISM shallow-shelf-approximation (SSA) stress-balance component (stage 2 of the eqice project): the flow-line membrane-divergence discretization, the face stiffness (4*nuH at a staggered face, nu from the face strain rate), and the surface-gradient rule with the SSAFD wall treatment. This file declares the flow-line geometry contract itself (metaparameter N = cell count, index sets x and face) rather than importing the cartesian_uniform_1d grid library, because the PISM SSAFD stencil evaluates the flux coefficient at the FACE from face quantities (strain rate, thickness) instead of averaging cell values -- see the rule description for the mapping to SSAFDBase.cc. Free names in template bodies (constants and parameters such as H, B, n, gamma_0, epsilon, dx, delta_p, ...) resolve against the importing model's declared parameters (esm-spec 9.6.1); templates referencing other templates (effective_viscosity) require the importing model to also import ./ice_rheology_templates.esm. Reference implementation: PISM v2.3.2 (stage1/pism/src/stressbalance/ssa/SSAFDBase.cc, SSAFD.cc)."
+  },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 60, "description": "Number of cells along x (the flow-line SSA grid; the PISM run has Mx=61 cells of which the last is ice-free ocean, so the shelf itself occupies 60 cells)." }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "N" },
+    "face": { "kind": "interval", "size": "N" }
+  },
+  "expression_templates": {
+    "ssa_face_stiffness": {
+      "description": "SSAFD face stiffness kf = 4*(nu*H_face + epsilon) at the face between two adjacent cells with velocities u_i, u_j and thicknesses H_i, H_j: nu = effective_viscosity(B, gamma_0 + u_x^2, n) with u_x = (u_j - u_i)/dx the face strain rate and gamma_0 the Schoof regularization (flow_law.Schoof_regularizing_velocity/length squared), H_face = (H_i + H_j)/2, and epsilon = stress_balance.ssa.epsilon the nuH regularization added to keep nuH bounded away from zero (SSAFDBase::compute_nuH_cfbc: nu*H + nuH_regularization; the factor 4 is the shallow-shelf x-momentum coefficient 4*nuH*u_x, see the divergence rule). The effective viscosity itself (0.5*B*(eps+gamma)^((1-n)/(2n))) is imported by reference from ice_rheology_templates.esm, so the importing model must import that library too (same contract as sia_templates.esm).",
+      "params": ["u_i", "u_j", "H_i", "H_j"],
+      "match": { "op": "ssa_face_stiffness", "args": ["u_i", "u_j", "H_i", "H_j"] },
+      "body": {
+        "op": "*",
+        "args": [
+          4.0,
+          {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "effective_viscosity",
+                    "args": [
+                      "B",
+                      {
+                        "op": "^",
+                        "args": [
+                          {
+                            "op": "/",
+                            "args": [
+                              { "op": "-", "args": ["u_j", "u_i"] },
+                              "dx"
+                            ]
+                          },
+                          2.0
+                        ]
+                      },
+                      "gamma_0",
+                      "n"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      0.5,
+                      { "op": "+", "args": ["H_i", "H_j"] }
+                    ]
+                  }
+                ]
+              },
+              "epsilon"
+            ]
+          }
+        ]
+      }
+    },
+    "ssa_surface_gradient_x": {
+      "description": "x-component of the surface gradient with the SSAFD wall treatment (SSAFDBase::compute_driving_stress): centered difference (h[i+1] - h[i-1])/(2*dx) in the interior; at the domain edges the surface is extrapolated with zero gradient (the ghost value equals the boundary cell), giving the one-sided differences (h[2] - h[1])/(2*dx) at i=1 and (h[N] - h[N-1])/(2*dx) at i=N. The i=N rule is exactly PISM's treatment at the calving front: floating ice next to ice-free ocean uses the one-sided difference divided by 2 (constant extrapolation of the surface beyond the front). Verified against the dumped driving stress: -rho*g*H*h_x reproduces the dump column taud_x to double precision at every cell.",
+      "params": ["h"],
+      "match": { "op": "ssa_surface_gradient_x", "args": ["h"] },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [
+          [[2, { "op": "-", "args": ["N", 1] }]],
+          [[1, 1]],
+          [["N", "N"]]
+        ],
+        "values": [
+          {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": ["h"],
+            "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }] },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    { "op": "index", "args": ["h", { "op": "+", "args": ["i", 1] }] },
+                    { "op": "index", "args": ["h", { "op": "-", "args": ["i", 1] }] }
+                  ]
+                },
+                { "op": "*", "args": [2.0, "dx"] }
+              ]
+            }
+          },
+          {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  { "op": "index", "args": ["h", 2] },
+                  { "op": "index", "args": ["h", 1] }
+                ]
+              },
+              { "op": "*", "args": [2.0, "dx"] }
+            ]
+          },
+          {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  { "op": "index", "args": ["h", "N"] },
+                  { "op": "index", "args": ["h", { "op": "-", "args": ["N", 1] }] }
+                ]
+              },
+              { "op": "*", "args": [2.0, "dx"] }
+            ]
+          }
+        ]
+      }
+    },
+    "ssa_flowline_membrane_divergence": {
+      "description": "Conservative-flow-line SSA membrane divergence div(4*nu*H*grad u) with the SSAFD (PISM) face evaluation and boundary rows, matching D(k*D(u,x),x) at priority 10 so it fires on the whole compound before any plain-D rule could lower the inner derivative (esm-spec 9.6.3). Match-scoped with where {u:{shape:[x]}, k:{shape:[x]}} so it fires only on this grid's x-shaped fields; `k` is the operator-form coefficient the consumer declares (the varcoeff-family contract), but the body does NOT read it: PISM's SSAFD evaluates the flux coefficient at each FACE from face quantities -- the face strain rate (u_j - u_i)/dx and the mean thickness (H_i + H_j)/2 -- via compute_nuH_cfbc, which is not the arithmetic mean of cell-centered coefficients. The body computes kf = 4*(nu*H_face + epsilon) at the faces through the ssa_face_stiffness template (free names H, B, n, gamma_0, epsilon, dx resolve in the consuming model). Regions (makearray, later regions overwrite earlier): interior [2, N-1] the SSAFD flux difference (kf[i+1/2]*(u[i+1]-u[i]) - kf[i-1/2]*(u[i]-u[i-1]))/dx^2, matching the PISM matrix row eq1 (SSAFDBase::assemble_matrix: off-diagonals -4*c.w/dx^2 and -4*c.e/dx^2 with c = nuH at the faces; the y-couplings vanish for the flow-line state, which is uniform in y, and the v-equation decouples); [1,1] the divergence at the Dirichlet cell with the left-wall flux set to 0 (finite placeholder; the dynamics replace this row by the prescribed-velocity penalty, see the consuming model); [N,N] the calving-front row: the east-face flux is PRESCRIBED as the front pressure difference delta_p (SSAFDBase::assemble_rhs: result.u = taud.u + (E-W)*delta_p/dx with E=1 at the ice-free-ocean face and the matrix E-weight dropped), i.e. fluxdiv[N] = (delta_p - kf[N-1/2]*(u[N]-u[N-1])/dx)/dx. `delta_p` is a free name supplied by the consumer (the front pressure difference H*(0.5*rho_i*g*H - P_water)). The steady equation the divergence enters is div(flux) = rho*g*H*h_x (SSAFD solves L*u = taud with L = -div and taud = -rho*g*H*h_x), so the residual of the membrane balance is fluxdiv - rho*g*H*h_x.",
+      "params": ["u", "k"],
+      "priority": 10,
+      "match": {
+        "op": "D",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "k",
+              { "op": "D", "args": ["u"], "wrt": "x" }
+            ]
+          }
+        ],
+        "wrt": "x"
+      },
+      "where": { "u": { "shape": ["x"] }, "k": { "shape": ["x"] } },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [
+          [[2, { "op": "-", "args": ["N", 1] }]],
+          [[1, 1]],
+          [["N", "N"]]
+        ],
+        "values": [
+          {
+            "op": "faq",
+            "output_idx": ["i"],
+            "args": ["u"],
+            "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }] },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "ssa_face_stiffness",
+                          "args": [
+                            { "op": "index", "args": ["u", "i"] },
+                            { "op": "index", "args": ["u", { "op": "+", "args": ["i", 1] }] },
+                            { "op": "index", "args": ["H", "i"] },
+                            { "op": "index", "args": ["H", { "op": "+", "args": ["i", 1] }] }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            { "op": "index", "args": ["u", { "op": "+", "args": ["i", 1] }] },
+                            { "op": "index", "args": ["u", "i"] }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "ssa_face_stiffness",
+                          "args": [
+                            { "op": "index", "args": ["u", { "op": "-", "args": ["i", 1] }] },
+                            { "op": "index", "args": ["u", "i"] },
+                            { "op": "index", "args": ["H", { "op": "-", "args": ["i", 1] }] },
+                            { "op": "index", "args": ["H", "i"] }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            { "op": "index", "args": ["u", "i"] },
+                            { "op": "index", "args": ["u", { "op": "-", "args": ["i", 1] }] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                { "op": "*", "args": ["dx", "dx"] }
+              ]
+            }
+          },
+          {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "ssa_face_stiffness",
+                    "args": [
+                      { "op": "index", "args": ["u", 1] },
+                      { "op": "index", "args": ["u", 2] },
+                      { "op": "index", "args": ["H", 1] },
+                      { "op": "index", "args": ["H", 2] }
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      { "op": "index", "args": ["u", 2] },
+                      { "op": "index", "args": ["u", 1] }
+                    ]
+                  }
+                ]
+              },
+              { "op": "*", "args": ["dx", "dx"] }
+            ]
+          },
+          {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "delta_p",
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          {
+                            "op": "ssa_face_stiffness",
+                            "args": [
+                              { "op": "index", "args": ["u", { "op": "-", "args": ["N", 1] }] },
+                              { "op": "index", "args": ["u", "N"] },
+                              { "op": "index", "args": ["H", { "op": "-", "args": ["N", 1] }] },
+                              { "op": "index", "args": ["H", "N"] }
+                            ]
+                          },
+                          {
+                            "op": "-",
+                            "args": [
+                              { "op": "index", "args": ["u", "N"] },
+                              { "op": "index", "args": ["u", { "op": "-", "args": ["N", 1] }] }
+                            ]
+                          }
+                        ]
+                      },
+                      "dx"
+                    ]
+                  }
+                ]
+              },
+              "dx"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

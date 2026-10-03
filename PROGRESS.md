@@ -496,6 +496,95 @@ built from the Stage-1 SIA dumps (`stage1/dumps/sia/`).
   `unlowered_operator: rewrite-target operator 'enthalpy_to_temperature'
   reached evaluation`).
 
+## Milestone 4 (continued) — Stage 2: SSA stress-balance component authored and passing ✅
+
+The third Stage-2 deliverable: the PISM shallow-shelf-approximation (SSA)
+stress-balance boundary as a hand-authored, compositional `.esm` component
+built from the Stage-1 SSA dumps (`stage1/dumps/ssa/`), flow-line form of
+verification test V (van der Veen / CFBC floating shelf).
+
+- **Deliverable** ✅ — `stage2/ssa.esm` (model SSAFlowline: the 1-D membrane
+  balance on the 60-cell test-V shelf) plus `stage2/ssa_templates.esm` (the
+  SSAFD expression-template library: `ssa_face_stiffness`,
+  `ssa_surface_gradient_x`, and the membrane-divergence rule
+  `ssa_flowline_membrane_divergence`), importing `effective_viscosity` from
+  `./ice_rheology_templates.esm` by reference. The templates declare the
+  flow-line geometry contract themselves (metaparameter N=60, index sets x
+  and face) rather than importing the cartesian_uniform_1d grid library, so
+  the file is self-contained for the eventual EarthSciDiscretizations PR.
+- **PDE as written** ✅ — the membrane momentum balance
+  div(4·ν·H·grad u) = ρ·g·H·h_x with PISM's SSAFD discretization:
+  `fluxdiv = D(k*D(u,x),x)` is rewritten (rule priority 10) into the
+  conservative face-flux-difference stencil — interior cells
+  (kf[i+½]·(u[i+1]−u[i]) − kf[i−½]·(u[i]−u[i−1]))/dx² with the **face**
+  stiffness kf = 4·(ν·H_face + ε), ν from the face strain rate and
+  H_face = (H_i+H_j)/2 (PISM's `compute_nuH_cfbc`, *not* the mean of cell
+  values — the operator-form `k` is declared for the div(k·grad u) spelling
+  but not read by the rule); the Dirichlet inflow row (u = V0 at the left
+  wall, PISM's bc_mask identity row) and the calving-front row with the
+  prescribed east-face flux δ_p (PISM's CFBC, `average_water_column_pressure`
+  for P_water; reduces to ½·ρ_i·g·(1−ρ_i/ρ_w)·H² at the front). Mapping to
+  SSAFDBase.cc is documented in the rule description for the
+  EarthSciDiscretizations PR. Basal drag is structured for later addition
+  (τ_b = 0 floating shelf; the β-row would enter the rule body).
+- **Pseudo-transient** ✅ — the harness cannot solve the implicit/elliptic
+  steady problem, so the SSAFD operator is relaxed:
+  du/dt = U_char·(fluxdiv − ρ·g·H·h_x)/(ρ·g·H) with a penalty row
+  du₁/dt = (V0 − u₁)/τ_dir (u₁ = V0 exactly at the fixed point) and the
+  front row carrying the prescribed flux. Time is dimensionless; the
+  slowest mode decays on τ̃ ≈ 3 pseudo-time units (fastest ~6e5), so
+  t_end = 100 ≈ 35 decay times reaches the fixed point to machine precision
+  (t ≈ 30). Verified sign: the dump's u closes this stencil to ~0.1% of the
+  local driving stress (Picard residual), and the relaxation converges to the
+  same fixed point.
+- **Tests** ✅ — 26 assertions, passing under the default (native, BDF),
+  `--compiler interpreter`, and `--solver sdirk`:
+  `testV_warm_start_ic` pins the ic (the van der Veen exact solution
+  u = Q0·(4C/Q0·X + H0⁻⁴)^¼ spelled from literals + N; rel 1e-9);
+  `testV_steady_state_ssafd` asserts at t_end=100: u vs the dump at cells
+  1/15/30/45/60 (rel 2e-3; cell 1 = V0 to rel 1e-6, the penalty row is
+  exact), u vs the exact solution (rel 4e-3; SSAFD discretization error
+  2.1–2.8e-3), taud_x vs the dump (rel 1e-10, bit-exact geometry),
+  nuH_face vs the dump at faces 15/30/45/60 (rel 2e-3; the front face is a
+  Schoof-regularized constant, rel 1e-3), flux_uH = Q0 (rel 4e-3), and the
+  membrane residual fluxdiv − ρgH·h_x < 1e-3 Pa at cells 15/30/45/60
+  (measured 2e-9…6e-7 Pa, solver-tolerance-limited).
+- **Dump caveat (documented in the test description)** — PISM's Picard
+  iteration stops on the relative nuH change < 1e-4
+  (`stress_balance.ssa.fd.relative_convergence`), which leaves an equation
+  residual of ~0.1% of the local driving stress; the conditioning of the
+  SSAFD operator amplifies that to a ~1.5e-3 relative spread in u between
+  the dump and the true fixed point. The assertions are calibrated to the
+  fixed point (the dump's u closes the discrete equations to ~0.1%).
+- **Harness findings (documented in the file comments)** —
+  1. the native compiler refuses a `faq` in a build-time (initial-condition)
+     scope that reads an observed produced by a rewrite rule (e.g. `fluxdiv`):
+     the state-free analysis collects only the names in the body, classifies
+     the faq as static, and refuses the per-cell walk it cannot take.
+     `residual` and `taud_x` are therefore written as array-level elementwise
+     expressions (skipped at build time, evaluated per step with the other
+     observed rules);
+  2. the native compiler refuses faqs that read an x-shaped array by a
+     `face`-set symbol (cross-axis index map); `nuH_face` is a positional
+     makearray with plain integer ranges;
+  3. diffsol (the harness solver) integrates the pseudo-transient to
+     t ≈ 108 (BDF, the default) / 290 (SDIRK) pseudo-time units and then
+     fails in the quasi-static regime: its finite-difference-Jacobian Newton
+     (step √ε·max(‖y‖,1)) cannot converge once the solution sits at the
+     fixed point (the weighted Newton norm is dominated by the huge
+     Schoof-regularized front-cell stiffness against the tight abstol).
+     t_end = 100 stays short of the wall with deterministic margin;
+  4. `./esm test` defaults to the BDF solver regardless of the document's
+     `solver.stiffness` hint (the hint only selects tolerances), so the
+     shipped test must pass under BDF — it does.
+- **Verification** ✅ — `./esm validate` clean on both files; `./esm info`
+  lists SSAFlowline (27 vars, 14 eqs); `./esm units --check`: 9 consistent /
+  0 mismatched / 5 not checked (the same non-literal `^`-exponent
+  informational pattern as ice_rheology/sia); regressions: ice_rheology.esm
+  313/313 and sia.esm 48/48, native and interpreter.
+- **C++ bugs** — none new; the SSA analysis found no additional issues in
+  the instrumented code (bugs.md #1–#6 unchanged).
+
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from

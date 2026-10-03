@@ -223,8 +223,14 @@ whether the `.esm` reproduces or corrects it, and status.
    313/313 tests passing) → stress balance: SIA ✅ (`stage2/sia.esm` +
    `stage2/sia_templates.esm`, 48/48 tests passing: diffusivity column chain,
    diffusive flux, 3D horizontal velocity, vertical velocity; rheology
-   regression still 313/313) → SSA → energy → basal/hydrology → bed →
-   surface/ocean/calving → subassemblies.
+   regression still 313/313) → SSA ✅ (`stage2/ssa.esm` +
+   `stage2/ssa_templates.esm`, 26/26 tests passing under native/BDF,
+   interpreter, and SDIRK: test-V / van der Veen CFBC shelf, flow-line
+   membrane balance div(4νH·grad u) = ρgH·h_x with the SSAFD face-stiffness
+   discretization, Dirichlet inflow penalty row, and calving-front
+   prescribed-flux row, relaxed pseudo-transiently to the steady state;
+   regressions: rheology 313/313 and SIA 48/48) → energy →
+   basal/hydrology → bed → surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 
