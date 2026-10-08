@@ -20,8 +20,10 @@ Keep a centralized list of any bugs or errors that are found in the C++ code.
 
 Do not store anything large in /tmp, as it is backed by RAM rather than hard drive and can cause an OOM.
 
-Do not put "Co-Authored-By: Claude ..." in any commit messages. Claude is an LLM and LLMs cannot take responsibility for outputs, therefore they cannot be authors.
+Do not put "Co-Authored-By: Claude ..." in any commit messages, or any other claims of LLM authorship. Claude is an LLM and LLMs cannot take responsibility for outputs, therefore they cannot be authors.
 
 Do not put files directly in /projects/.../ctessum, that is a shared directory with other people. Store files that should be persistent over a medium horizon but not checked into git in a .gitignored subdirectory of your working directory. Store temporary files in /scratch.local/ctessum; these might disappear between sessions.
 
 Keep track of progress in PROGRESS.md
+
+Perform work in a manager-worker arrangment, with the manager dispatching up to three subagents at a time to perform tasks (working on worktrees), then checking, merging, and cleaning up the subagents' work as they complete.
