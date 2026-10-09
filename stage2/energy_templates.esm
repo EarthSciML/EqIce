@@ -1,0 +1,582 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "energy_templates",
+    "description": "Expression-template library for the PISM ice-energy component (stage 2 of the eqice project): the vertical diffusion D(K*D(E,z),z) with the BOMBPROOF column stencil of enthSystemCtx (the PISM implicit vertical solve for the enthalpy equation), the vertical advection with the BOMBPROOF upwind A-coefficients, the explicit horizontal advection with first-order upwinding, the cold/temperate thermal diffusivity switch (the R array of enthSystemCtx::assemble_R, K = k/(rho*c)), the coarse-to-fine and fine-to-coarse column interpolation of ColumnInterpolation.cc, and the Aschwanden-Bueler drainage-rate curve of DrainageCalculator.hh. This file declares the column-grid contract itself (metaparameters Mz = 61 storage levels and Mz_fine = 62 fine levels, index sets lev and lev_f) rather than importing a grid library, because the PISM enthalpy solve runs on the fine grid (dz_f = 4000/61 m) produced by ColumnInterpolation::init_fine_grid while all dumped inputs/outputs live on the storage grid (dz_s = 4000/60 m). The diffusion rule body is a single faq over lev_f with a runtime ifelse chain (i == 1 basal / 2 <= i <= ks interior / else 0) instead of a makearray with regions, because makearray regions are load-time and cannot depend on the runtime parameter ks; likewise the advection and interpolation templates use faq chains. Free names in template bodies (constants and parameters such as rho_ice, c_ice, k_ice, ratio, dz, G, lambda, ks, dx, OM1, DR3, and the interpolation maps m_c2f, incr_c2f, m_f2c, incr_f2c) resolve against the importing model's declared parameters (esm-spec 9.6.1); templates referencing other templates (energy_thermal_diffusivity, energy_drainage_rate) require the importing model to also import ./ice_rheology_templates.esm for the enthalpy-converter free names (T_melting, beta_Clausius_Clapeyron, L_0, c_water, T_0). Reference implementation: PISM v2.3.2 (stage1/pism/src/energy/enthSystem.cc, EnthalpyModel.cc, DrainageCalculator.hh; stage1/pism/src/util/ColumnInterpolation.cc)."
+  },
+  "metaparameters": {
+    "Mz": { "type": "integer", "default": 61, "description": "Number of storage (coarse) vertical levels of the instrumented run (Mz = 61, dz_s = 4000/60 m; level k at index k+1, 1-based)." },
+    "Mz_fine": { "type": "integer", "default": 62, "description": "Number of fine vertical levels of the PISM enthalpy solve (ColumnInterpolation::init_fine_grid: Mz_fine = ceil(Lz/dz_s) + 1 = 62, dz_f = 4000/61 m; fine level k at index k+1, 1-based)." }
+  },
+  "index_sets": {
+    "lev": { "kind": "interval", "size": "Mz" },
+    "lev_f": { "kind": "interval", "size": "Mz_fine" }
+  },
+  "expression_templates": {
+    "energy_thermal_diffusivity": {
+      "description": "Effective thermal diffusivity of the enthalpy equation: K = k_ice/(rho_ice*c_ice) for cold ice (E < E_s) and ratio*k_ice/(rho_ice*c_ice) for temperate ice (E >= E_s), where ratio = energy.enthalpy.temperate_ice_thermal_conductivity_ratio and E_s = E_s(p) is the cold-temperate transition enthalpy (enthSystemCtx::assemble_R: m_R[k] = R_cold/R_temp with R = K*dt/dz^2; the R array switches at the CTS). Units m^2/s.",
+      "params": ["E", "E_s"],
+      "match": { "op": "energy_thermal_diffusivity", "args": ["E", "E_s"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">=", "args": ["E", "E_s"] },
+          {
+            "op": "*",
+            "args": [
+              "ratio",
+              { "op": "/", "args": ["k_ice", { "op": "*", "args": ["rho_ice", "c_ice"] }] }
+            ]
+          },
+          { "op": "/", "args": ["k_ice", { "op": "*", "args": ["rho_ice", "c_ice"] }] }
+        ]
+      }
+    },
+    "energy_vertical_diffusion": {
+      "description": "Vertical enthalpy diffusion D(K*D(E_f,z),z) with the PISM BOMBPROOF column stencil of the enthSystemCtx tridiagonal solve, rewritten at priority 10 so it fires on the whole compound before any plain-D rule could lower the inner derivative (esm-spec 9.6.3). Match-scoped with where {E_f:{shape:[lev_f]}, K:{shape:[lev_f]}} so it fires only on this column grid. The body is a single faq over lev_f with a runtime ifelse chain (makearray regions are load-time and cannot depend on the runtime parameter ks): row i = 1 is the basal Neumann row of set_basal_neumann_bc -- (K[1] + 0.5*(K[1]+K[2]))*(E_f[2]-E_f[1])/dz^2 - 2*G*K[1]/dz with G = -q_geo/(rho_ice*K[1]) the basal enthalpy-flux gradient (set_basal_heat_flux: K = rho*dz^2*R[0]/dt, G = -heat_flux/K; the sign is verified against the instrumented run: q_geo = 0.042 W/m^2 warms the base); rows 2..ks are the centered mean-face stencil 0.5*(K[i-1]+K[i])*(E_f[i-1]-E_f[i])/dz^2 + 0.5*(K[i]+K[i+1])*(E_f[i+1]-E_f[i])/dz^2 (the L/D/U rows of solve()); rows ks+1..Mz_fine (the Dirichlet surface row and the atmosphere) return 0 -- their dynamics are the surface/air penalty of the consuming model, which pins them to Enth_ks. Verified against the instrumented PISM v2.3.2 run: the assembled system reproduces the dumped E_out to 1.5e-11 (see ref_energy.py).",
+      "params": ["K", "E_f"],
+      "priority": 10,
+      "match": {
+        "op": "D",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "K",
+              { "op": "D", "args": ["E_f"], "wrt": "z" }
+            ]
+          }
+        ],
+        "wrt": "z"
+      },
+      "where": { "E_f": { "shape": ["lev_f"] }, "K": { "shape": ["lev_f"] } },
+      "body": {
+        "op": "faq",
+        "output_idx": ["i"],
+        "args": [],
+        "ranges": { "i": { "from": "lev_f" } },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            { "op": "==", "args": ["i", 1] },
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "+",
+                          "args": [
+                            { "op": "index", "args": ["K", 1] },
+                            {
+                              "op": "*",
+                              "args": [
+                                0.5,
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    { "op": "index", "args": ["K", 1] },
+                                    { "op": "index", "args": ["K", 2] }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            { "op": "index", "args": ["E_f", 2] },
+                            { "op": "index", "args": ["E_f", 1] }
+                          ]
+                        }
+                      ]
+                    },
+                    { "op": "*", "args": ["dz", "dz"] }
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [2.0, "G", { "op": "index", "args": ["K", 1] }]
+                    },
+                    "dz"
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "and",
+                  "args": [
+                    { "op": ">=", "args": ["i", 2] },
+                    { "op": "<=", "args": ["i", "ks"] }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                0.5,
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    { "op": "index", "args": ["K", { "op": "-", "args": ["i", 1] }] },
+                                    { "op": "index", "args": ["K", "i"] }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "-",
+                              "args": [
+                                { "op": "index", "args": ["E_f", { "op": "-", "args": ["i", 1] }] },
+                                { "op": "index", "args": ["E_f", "i"] }
+                              ]
+                            }
+                          ]
+                        },
+                        { "op": "*", "args": ["dz", "dz"] }
+                      ]
+                    },
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                0.5,
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    { "op": "index", "args": ["K", "i"] },
+                                    { "op": "index", "args": ["K", { "op": "+", "args": ["i", 1] }] }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "-",
+                              "args": [
+                                { "op": "index", "args": ["E_f", { "op": "+", "args": ["i", 1] }] },
+                                { "op": "index", "args": ["E_f", "i"] }
+                              ]
+                            }
+                          ]
+                        },
+                        { "op": "*", "args": ["dz", "dz"] }
+                      ]
+                    }
+                  ]
+                },
+                0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "energy_vertical_advection": {
+      "description": "Vertical enthalpy advection with the BOMBPROOF upwind A-coefficients of enthSystemCtx::solve (rows k = 1..ks-1) and set_basal_neumann_bc (row k = 0), the vertical velocity treated implicitly through the tridiagonal: row i = 1 (basal) carries (w[1]/dz)*(A_d*E[1] + A_u*E[2]) + w[1]*A_b*G with the basal A-coefficients A_d = lambda-1 (w < 0) / 1-lambda, A_u = 1-lambda (w < 0) / lambda-1, A_b = -lambda (w < 0) / lambda-2; rows 2..ks carry (w[i]/dz)*(A_l*E[i-1] + A_d*E[i] + A_u*E[i+1]) with the interior coefficients A_l = 0.5*lambda-1 (w >= 0) / -0.5*lambda, A_d = 1-lambda (w >= 0) / lambda-1, A_u = 0.5*lambda (w >= 0) / 1-0.5*lambda; rows ks+1..Mz_fine return 0 (the Dirichlet surface row and the atmosphere carry no vertical advection). lambda is the BOMBPROOF parameter (1 for cold columns, 0 if temperate ice is present; the consuming model computes it from the initial state), G the basal enthalpy-flux gradient of the diffusion rule, and dz the fine-grid spacing. The template is invoked explicitly (match-less) with E bound to the evolving fine-grid enthalpy so the harness's implicit integration reproduces PISM's implicit treatment of the vertical advection.",
+      "params": ["E", "w"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i"],
+        "args": [],
+        "ranges": { "i": { "from": "lev_f" } },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            { "op": "==", "args": ["i", 1] },
+            {
+              "op": "+",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        { "op": "index", "args": ["w", 1] },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": "<", "args": [{ "op": "index", "args": ["w", 1] }, 0.0] },
+                                    { "op": "-", "args": ["lambda", 1.0] },
+                                    { "op": "-", "args": [1.0, "lambda"] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", 1] }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": "<", "args": [{ "op": "index", "args": ["w", 1] }, 0.0] },
+                                    { "op": "-", "args": [1.0, "lambda"] },
+                                    { "op": "-", "args": ["lambda", 1.0] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", 2] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "dz"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "index", "args": ["w", 1] },
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        { "op": "<", "args": [{ "op": "index", "args": ["w", 1] }, 0.0] },
+                        { "op": "-", "args": [0.0, "lambda"] },
+                        { "op": "-", "args": ["lambda", 2.0] }
+                      ]
+                    },
+                    "G"
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "and",
+                  "args": [
+                    { "op": ">=", "args": ["i", 2] },
+                    { "op": "<=", "args": ["i", "ks"] }
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        { "op": "index", "args": ["w", "i"] },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["w", "i"] }, 0.0] },
+                                    { "op": "-", "args": [{ "op": "*", "args": [0.5, "lambda"] }, 1.0] },
+                                    { "op": "-", "args": [0.0, { "op": "*", "args": [0.5, "lambda"] }] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", { "op": "-", "args": ["i", 1] }] }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["w", "i"] }, 0.0] },
+                                    { "op": "-", "args": [1.0, "lambda"] },
+                                    { "op": "-", "args": ["lambda", 1.0] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", "i"] }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["w", "i"] }, 0.0] },
+                                    { "op": "*", "args": [0.5, "lambda"] },
+                                    { "op": "-", "args": [1.0, { "op": "*", "args": [0.5, "lambda"] }] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", { "op": "+", "args": ["i", 1] }] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "dz"
+                  ]
+                },
+                0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "energy_horizontal_advection": {
+      "description": "Explicit horizontal enthalpy advection with first-order upwinding, the x/y terms of the B array of enthSystemCtx::solve and set_basal_neumann_bc: hadv = -upwind_u - upwind_v = -(u[i]/dx)*(E[i]-E_w[i] for u >= 0, else E_e[i]-E[i]) -(v[i]/dx)*(E[i]-E_s[i] for v >= 0, else E_n[i]-E[i]) per row i = 1..ks (the leading negation wraps the sum of the two upwind fluxes -- the RHS of the C++ solve subtracts upwind_u and upwind_v), where E_w/E_e/E_n/E_s are the c2f-interpolated neighbor-column enthalpies (E_m/E_p of the upwind() helper with delta_inverse = 1/dx) and dx the horizontal grid spacing. The sign is verified against the instrumented run: columns with nonzero horizontal velocity (c21_15, c26_15) match the dump only when the u-term carries the same minus as the v-term. PISM treats the horizontal advection explicitly at the OLD enthalpy, so the consuming model invokes this template with E bound to the FROZEN initial-state enthalpy E_f_init, not the evolving field. Two gates: the PISM marginal-column gate (energy.margin_exclude_horizontal_advection: include_horizontal_advection = not(marginal and exclude_h_adv), enthSystemCtx::solve) and the column domain gate (rows ks+1..Mz_fine carry no horizontal advection; they are the Dirichlet surface row and the atmosphere). Rows 1..ks only, 0 elsewhere.",
+      "params": ["E", "u", "v", "E_w", "E_e", "E_n", "E_s"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i"],
+        "args": [],
+        "ranges": { "i": { "from": "lev_f" } },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": "and",
+              "args": ["marginal", "exclude_h_adv"]
+            },
+            0.0,
+            {
+              "op": "ifelse",
+              "args": [
+                { "op": "<=", "args": ["i", "ks"] },
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                { "op": "index", "args": ["u", "i"] },
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["u", "i"] }, 0.0] },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        { "op": "index", "args": ["E", "i"] },
+                                        { "op": "index", "args": ["E_w", "i"] }
+                                      ]
+                                    },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        { "op": "index", "args": ["E_e", "i"] },
+                                        { "op": "index", "args": ["E", "i"] }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "dx"
+                          ]
+                        },
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                { "op": "index", "args": ["v", "i"] },
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["v", "i"] }, 0.0] },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        { "op": "index", "args": ["E", "i"] },
+                                        { "op": "index", "args": ["E_s", "i"] }
+                                      ]
+                                    },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        { "op": "index", "args": ["E_n", "i"] },
+                                        { "op": "index", "args": ["E", "i"] }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "dx"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "energy_coarse_to_fine": {
+      "description": "ColumnInterpolation::coarse_to_fine_linear of the PISM column interpolation: per fine level i (1-based), the coarse index m_c2f[i] and the within-cell fraction incr_c2f[i] are baked parameters (the z_s/z_f geometry is fixed by the metaparameters Mz/Mz_fine), and the fine value is x[m_c2f[i]] + incr_c2f[i]*(x[m_c2f[i]+1] - x[m_c2f[i]]) -- linear interpolation between the bracketing storage levels -- except above the ice surface (i > ks+1, the levels whose depth exceeds the thickness H) and at the top storage level (m_c2f[i] == Mz-1, unreachable at these grid parameters but kept for fidelity to the C++ guard), where the value is the constant x[m_c2f[i]]. ks is the PISM 0-based fine level of the ice surface (floor(H/dz_f), capped at Mz_fine-1), so the 1-based rows 1..ks+1 of the fine grid lie at or below the surface and interpolate linearly; the rows above are constant (they hold Enth_ks for the enthalpy input).",
+      "params": ["x"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i"],
+        "args": [],
+        "ranges": { "i": { "from": "lev_f" } },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": "and",
+              "args": [
+                { "op": "<=", "args": ["i", { "op": "+", "args": ["ks", 1] }] },
+                { "op": "<", "args": [{ "op": "index", "args": ["m_c2f", "i"] }, { "op": "-", "args": ["Mz", 1] }] }
+              ]
+            },
+            {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["x", { "op": "index", "args": ["m_c2f", "i"] }] },
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "index", "args": ["incr_c2f", "i"] },
+                    {
+                      "op": "-",
+                      "args": [
+                        { "op": "index", "args": ["x", { "op": "+", "args": [{ "op": "index", "args": ["m_c2f", "i"] }, 1] }] },
+                        { "op": "index", "args": ["x", { "op": "index", "args": ["m_c2f", "i"] }] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            { "op": "index", "args": ["x", { "op": "index", "args": ["m_c2f", "i"] }] }
+          ]
+        }
+      }
+    },
+    "energy_fine_to_coarse": {
+      "description": "ColumnInterpolation::fine_to_coarse_linear of the PISM column interpolation: per storage level j (1-based), the fine index m_f2c[j] and the within-cell fraction incr_f2c[j] are baked parameters, and the coarse value is E[m_f2c[j]] + incr_f2c[j]*(E[m_f2c[j]+1] - E[m_f2c[j]]) for j < Mz (linear interpolation between the bracketing fine levels), and E[m_f2c[j]] at the top storage level j = Mz (the C++ constant branch). This is the map EnthalpyModel::update applies to the post-processed fine-grid enthalpy to produce the storage-grid E_out that the dumps carry.",
+      "params": ["E"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["j"],
+        "args": [],
+        "ranges": { "j": { "from": "lev" } },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            { "op": "<", "args": ["j", "Mz"] },
+            {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["E", { "op": "index", "args": ["m_f2c", "j"] }] },
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "index", "args": ["incr_f2c", "j"] },
+                    {
+                      "op": "-",
+                      "args": [
+                        { "op": "index", "args": ["E", { "op": "+", "args": [{ "op": "index", "args": ["m_f2c", "j"] }, 1] }] },
+                        { "op": "index", "args": ["E", { "op": "index", "args": ["m_f2c", "j"] }] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            { "op": "index", "args": ["E", { "op": "index", "args": ["m_f2c", "j"] }] }
+          ]
+        }
+      }
+    },
+    "energy_drainage_rate": {
+      "description": "The Aschwanden-Bueler-Khroulev-Blatter drainage-rate curve D(omega) of DrainageCalculator::get_drainage_rate: 0 for omega <= OM1 (the drainage target water fraction, energy.drainage_target_water_fraction = 0.01); DR2*(omega - OM1)/OM1 for OM1 < omega <= 2*OM1 with DR2 = 0.1*DR3; DR2 + (DR3 - DR2)*(omega - 2*OM1)/OM1 for 2*OM1 < omega <= 3*OM1; DR3 for omega > 3*OM1, with DR3 the maximum drainage rate (energy.drainage_maximum_rate = 0.05 yr^-1 = 1.5844382307706401e-9 s^-1). Units 1/s. Free names OM1 and DR3 resolve in the consuming model.",
+      "params": ["omega"],
+      "match": { "op": "energy_drainage_rate", "args": ["omega"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": ["omega", { "op": "*", "args": [3.0, "OM1"] }] },
+          "DR3",
+          {
+            "op": "ifelse",
+            "args": [
+              { "op": ">", "args": ["omega", { "op": "*", "args": [2.0, "OM1"] }] },
+              {
+                "op": "+",
+                "args": [
+                  { "op": "*", "args": [0.1, "DR3"] },
+                  {
+                    "op": "*",
+                    "args": [
+                      { "op": "-", "args": ["DR3", { "op": "*", "args": [0.1, "DR3"] }] },
+                      {
+                        "op": "/",
+                        "args": [
+                          { "op": "-", "args": ["omega", { "op": "*", "args": [2.0, "OM1"] }] },
+                          "OM1"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "ifelse",
+                "args": [
+                  { "op": ">", "args": ["omega", "OM1"] },
+                  {
+                    "op": "*",
+                    "args": [
+                      { "op": "*", "args": [0.1, "DR3"] },
+                      { "op": "/", "args": [{ "op": "-", "args": ["omega", "OM1"] }, "OM1"] }
+                    ]
+                  },
+                  0.0
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
