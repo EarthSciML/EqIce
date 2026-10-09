@@ -1,0 +1,5457 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "bed_deformation",
+    "description": "PISM bed-deformation boundary (stage 2 of the eqice project), model bed_deformation.model = 'iso' (bed::PointwiseIsostasy): the ice-equivalent load transmitted to the bed (compute_load: ice_load = H, ocean_load = (rho_sea_water/rho_ice)*max(sea_level-bed, 0), floating-ice load excluded), the instantaneous isostasy update topg_out = bed_in - f*(load - load_last) with f = rho_ice/rho_mantle and load_last <- load (PointwiseIsostasy has NO relaxation time: a load change is fully compensated in the single update that follows it), and the BedDef load-accumulator semantics: BedDef::update() accumulates load*dt on every call and only triggers update_impl() when t_final reaches the next update time (m_t_last + bed_deformation.update_interval), feeding it the time-averaged load m_load_accumulator/dt_beddef (the C++ scales by the reciprocal 1/dt_beddef) and then setting uplift = (topg - topg_last)/dt_beddef, topg_last = topg. The PointwiseIsostasyUpdate / ComputeLoad models are the pointwise laws (tested against stage1/dumps/bed/pointwise.csv at rel 1e-12); BedDefLoadAccumulator is the interval time average (the exact evaluation of the interval integral for the piecewise-constant driver history of stage1/dumps/bed/load_history.csv); PointwiseIsostasyTwoIntervals is the two-full-update-interval state trajectory (the columns.csv contract: bed_out_1 = -f*150 m, bed_out_2 = -f*300 m under the ice, no change where the load does not change). All shared math is imported by reference from ./bed_templates.esm. Deferred: bed_deformation.model = 'given' (Given), 'null' (Null), and 'lc' (LingleClark / LingleClarkSerial, the Fourier spectral-collocation viscous relaxation with mantle_viscosity and elastic lithosphere -- a future subassembly); the BedDef update_impl dispatch / accumulator state machine is represented here by the two-interval trace and the accumulator models because the inline-test runner integrates ODEs without event handling (esm-spec; the harness refuses models with discrete_events), and the PointwiseIsostasy update is instantaneous."
+  },
+  "models": {
+    "ComputeLoad": {
+      "expression_template_imports": [
+        {
+          "ref": "./bed_templates.esm"
+        }
+      ],
+      "variables": {
+        "bed": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "bedrock elevation (the C++ bed argument of compute_load; BedDef accumulates the load against m_topg_last, the bed at the start of the interval)"
+        },
+        "ice_thickness": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "ice thickness H (the load of grounded ice in ice-equivalent meters)"
+        },
+        "sea_level": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "sea level elevation (the C++ sea_level_elevation argument of compute_load)"
+        },
+        "rho_ice": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density (constants.ice.density)"
+        },
+        "rho_sea_water": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 1028.0,
+          "description": "sea water density (constants.sea_water.density)"
+        },
+        "ocean_depth": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ocean depth max(sea_level - bed, 0)"
+        },
+        "ocean_load": {
+          "type": "unknown",
+          "units": "m",
+          "description": "seawater load expressed as ice-equivalent thickness (rho_sea_water/rho_ice)*ocean_depth"
+        },
+        "load": {
+          "type": "unknown",
+          "units": "m",
+          "description": "load on the bed expressed as ice-equivalent thickness (ice_load = H if H > ocean_load else 0; the load of floating ice is excluded)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "compute_load: ocean_depth = max(sea_level - bed, 0).",
+          "lhs": "ocean_depth",
+          "rhs": {
+            "op": "bed_ocean_depth",
+            "args": [
+              "sea_level",
+              "bed"
+            ]
+          }
+        },
+        {
+          "_comment": "compute_load: ocean_load = (rho_sea_water/rho_ice)*ocean_depth.",
+          "lhs": "ocean_load",
+          "rhs": {
+            "op": "bed_ocean_load",
+            "args": [
+              "rho_sea_water",
+              "rho_ice",
+              "ocean_depth"
+            ]
+          }
+        },
+        {
+          "_comment": "compute_load: return ice_load if ice_load > ocean_load else 0 (this excludes the load of ice shelves).",
+          "lhs": "load",
+          "rhs": {
+            "op": "bed_load",
+            "args": [
+              "ice_thickness",
+              "ocean_load"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "compute_load_tuple_1",
+          "description": "compute_load(bed=-200 m, H=0 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 200 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 0.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_2",
+          "description": "compute_load(bed=-200 m, H=0 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 250 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 0.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 250.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_3",
+          "description": "compute_load(bed=-200 m, H=0 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 300 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 0.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_4",
+          "description": "compute_load(bed=-200 m, H=100 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 200 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 100.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_5",
+          "description": "compute_load(bed=-200 m, H=100 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 250 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 100.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 250.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_6",
+          "description": "compute_load(bed=-200 m, H=100 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 300 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 100.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_7",
+          "description": "compute_load(bed=-200 m, H=500 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 200 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 500.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_8",
+          "description": "compute_load(bed=-200 m, H=500 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 250 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 500.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 250.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_9",
+          "description": "compute_load(bed=-200 m, H=500 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 300 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 500.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_10",
+          "description": "compute_load(bed=-200 m, H=2000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 200 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_11",
+          "description": "compute_load(bed=-200 m, H=2000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 250 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 250.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_12",
+          "description": "compute_load(bed=-200 m, H=2000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 300 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_13",
+          "description": "compute_load(bed=-200 m, H=3000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 200 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_14",
+          "description": "compute_load(bed=-200 m, H=3000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 250 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 250.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_15",
+          "description": "compute_load(bed=-200 m, H=3000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 300 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": -200.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_16",
+          "description": "compute_load(bed=0 m, H=0 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 0.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_17",
+          "description": "compute_load(bed=0 m, H=0 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 50 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 0.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 50.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_18",
+          "description": "compute_load(bed=0 m, H=0 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 100 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 0.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_19",
+          "description": "compute_load(bed=0 m, H=100 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 100.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_20",
+          "description": "compute_load(bed=0 m, H=100 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 50 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 100.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 50.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_21",
+          "description": "compute_load(bed=0 m, H=100 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 100 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 100.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_22",
+          "description": "compute_load(bed=0 m, H=500 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 500.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_23",
+          "description": "compute_load(bed=0 m, H=500 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 50 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 500.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 50.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_24",
+          "description": "compute_load(bed=0 m, H=500 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 100 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 500.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_25",
+          "description": "compute_load(bed=0 m, H=2000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_26",
+          "description": "compute_load(bed=0 m, H=2000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 50 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 50.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_27",
+          "description": "compute_load(bed=0 m, H=2000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 100 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_28",
+          "description": "compute_load(bed=0 m, H=3000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_29",
+          "description": "compute_load(bed=0 m, H=3000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 50 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 50.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_30",
+          "description": "compute_load(bed=0 m, H=3000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 100 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 0.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_31",
+          "description": "compute_load(bed=100 m, H=0 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 0.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_32",
+          "description": "compute_load(bed=100 m, H=0 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 0.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_33",
+          "description": "compute_load(bed=100 m, H=0 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 0.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_34",
+          "description": "compute_load(bed=100 m, H=100 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 100.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_35",
+          "description": "compute_load(bed=100 m, H=100 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 100.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_36",
+          "description": "compute_load(bed=100 m, H=100 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 100.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_37",
+          "description": "compute_load(bed=100 m, H=500 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 500.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_38",
+          "description": "compute_load(bed=100 m, H=500 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 500.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_39",
+          "description": "compute_load(bed=100 m, H=500 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 500.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_40",
+          "description": "compute_load(bed=100 m, H=2000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_41",
+          "description": "compute_load(bed=100 m, H=2000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_42",
+          "description": "compute_load(bed=100 m, H=2000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_43",
+          "description": "compute_load(bed=100 m, H=3000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_44",
+          "description": "compute_load(bed=100 m, H=3000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_45",
+          "description": "compute_load(bed=100 m, H=3000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 100.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_46",
+          "description": "compute_load(bed=500 m, H=0 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 0.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_47",
+          "description": "compute_load(bed=500 m, H=0 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 0.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_48",
+          "description": "compute_load(bed=500 m, H=0 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 0.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_49",
+          "description": "compute_load(bed=500 m, H=100 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 100.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_50",
+          "description": "compute_load(bed=500 m, H=100 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 100.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_51",
+          "description": "compute_load(bed=500 m, H=100 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 100 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 100.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_52",
+          "description": "compute_load(bed=500 m, H=500 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 500.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_53",
+          "description": "compute_load(bed=500 m, H=500 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 500.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_54",
+          "description": "compute_load(bed=500 m, H=500 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 500 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 500.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 500.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_55",
+          "description": "compute_load(bed=500 m, H=2000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_56",
+          "description": "compute_load(bed=500 m, H=2000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_57",
+          "description": "compute_load(bed=500 m, H=2000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 2000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_58",
+          "description": "compute_load(bed=500 m, H=3000 m, sea_level=0 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 0.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_59",
+          "description": "compute_load(bed=500 m, H=3000 m, sea_level=50 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 50.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "compute_load_tuple_60",
+          "description": "compute_load(bed=500 m, H=3000 m, sea_level=100 m) with rho_ice=910, rho_sea_water=1028: ocean_depth = max(sea_level-bed, 0) = 0 m; load = H if H > (1028/910)*ocean_depth else 0 = 3000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "bed": 500.0,
+            "ice_thickness": 3000.0,
+            "sea_level": 100.0,
+            "rho_ice": 910.0,
+            "rho_sea_water": 1028.0
+          },
+          "assertions": [
+            {
+              "variable": "ocean_depth",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load",
+              "time": 0.0,
+              "expected": 3000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "PointwiseIsostasyUpdate": {
+      "expression_template_imports": [
+        {
+          "ref": "./bed_templates.esm"
+        }
+      ],
+      "variables": {
+        "load": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "the time-averaged load fed to update_impl (ice-equivalent m)"
+        },
+        "bed_in": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "bed elevation at the start of the update interval (m_topg_last)"
+        },
+        "load_last": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "load at the time of the previous update (m_load_last; initialized to the initial load by init_impl)"
+        },
+        "rho_ice": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density (constants.ice.density, the 'load density' of PointwiseIsostasy::update_impl)"
+        },
+        "rho_mantle": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 3300.0,
+          "description": "mantle density (bed_deformation.mantle_density)"
+        },
+        "f": {
+          "type": "unknown",
+          "units": "1",
+          "description": "isostatic compensation factor rho_ice/rho_mantle"
+        },
+        "bed_out": {
+          "type": "unknown",
+          "units": "m",
+          "description": "bed elevation after the update: topg_{n+1} = topg_last - f*(load - load_last)"
+        },
+        "new_load_last": {
+          "type": "unknown",
+          "units": "m",
+          "description": "load_last after the update: load_last <- load (PointwiseIsostasy has no relaxation time)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "PointwiseIsostasy::update_impl: f = rho_ice/rho_mantle.",
+          "lhs": "f",
+          "rhs": {
+            "op": "isostatic_compensation_factor",
+            "args": [
+              "rho_ice",
+              "rho_mantle"
+            ]
+          }
+        },
+        {
+          "_comment": "PointwiseIsostasy::update_impl: topg = topg_last - f*(load - load_last).",
+          "lhs": "bed_out",
+          "rhs": {
+            "op": "isostatic_bed_update",
+            "args": [
+              "bed_in",
+              "load",
+              "load_last",
+              "rho_ice",
+              "rho_mantle"
+            ]
+          }
+        },
+        {
+          "_comment": "PointwiseIsostasy::update_impl: load_last <- load.",
+          "lhs": "new_load_last",
+          "rhs": "load"
+        }
+      ],
+      "tests": [
+        {
+          "id": "update_law_tuple_1",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=-200 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -200 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": -200.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_2",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=-200 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -158.63636363636363 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": -200.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -158.63636363636363,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_3",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=-200 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -117.27272727272727 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": -200.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -117.27272727272727,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_4",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=-200 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -241.36363636363637 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": -200.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -241.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_5",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=-200 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -200 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": -200.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_6",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=-200 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -158.63636363636363 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": -200.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -158.63636363636363,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_7",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=-200 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -282.72727272727275 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": -200.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -282.72727272727275,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_8",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=-200 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -241.36363636363637 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": -200.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -241.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_9",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=-200 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -200 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": -200.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -200.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_10",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=-200 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -475.75757575757575 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": -200.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -475.75757575757575,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_11",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=-200 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -434.39393939393938 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": -200.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -434.3939393939394,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_12",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=-200 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -393.030303030303 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": -200.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -393.030303030303,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_13",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=-200 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -751.5151515151515 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": -200.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -751.5151515151515,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_14",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=-200 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -710.15151515151513 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": -200.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -710.1515151515151,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_15",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=-200 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -668.78787878787875 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": -200.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -668.7878787878788,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_16",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=-100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -100 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": -100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_17",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=-100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -58.636363636363633 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": -100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -58.63636363636363,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_18",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=-100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -17.272727272727266 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": -100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -17.272727272727266,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_19",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=-100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -141.36363636363637 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": -100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -141.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_20",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=-100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -100 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": -100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_21",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=-100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -58.636363636363633 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": -100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -58.63636363636363,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_22",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=-100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -182.72727272727275 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": -100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -182.72727272727275,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_23",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=-100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -141.36363636363637 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": -100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -141.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_24",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=-100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -100 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": -100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_25",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=-100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -375.75757575757575 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": -100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -375.75757575757575,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_26",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=-100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -334.39393939393938 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": -100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -334.3939393939394,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_27",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=-100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -293.030303030303 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": -100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -293.030303030303,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_28",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=-100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -651.5151515151515 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": -100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -651.5151515151515,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_29",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=-100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -610.15151515151513 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": -100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -610.1515151515151,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_30",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=-100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -568.78787878787875 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": -100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -568.7878787878788,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_31",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=0 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 0 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": 0.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_32",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=0 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 41.363636363636367 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": 0.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 41.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_33",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=0 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 82.727272727272734 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": 0.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 82.72727272727273,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_34",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=0 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -41.363636363636367 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": 0.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -41.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_35",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=0 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 0 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": 0.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_36",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=0 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 41.363636363636367 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": 0.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 41.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_37",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=0 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -82.727272727272734 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": 0.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -82.72727272727273,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_38",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=0 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -41.363636363636367 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": 0.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -41.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_39",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=0 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 0 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": 0.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_40",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=0 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -275.75757575757575 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": 0.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -275.75757575757575,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_41",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=0 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -234.39393939393941 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": 0.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -234.3939393939394,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_42",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=0 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -193.03030303030303 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": 0.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -193.03030303030303,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_43",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=0 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -551.5151515151515 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": 0.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -551.5151515151515,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_44",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=0 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -510.15151515151513 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": 0.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -510.1515151515151,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_45",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=0 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -468.78787878787881 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": 0.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -468.7878787878788,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_46",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 100 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": 100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_47",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 141.36363636363637 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": 100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 141.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_48",
+          "description": "PointwiseIsostasy update at load=0 m, bed_in=100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 182.72727272727275 m, load_last <- load = 0 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 0.0,
+            "bed_in": 100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 182.72727272727275,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_49",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 58.636363636363633 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": 100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 58.63636363636363,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_50",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 100 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": 100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_51",
+          "description": "PointwiseIsostasy update at load=150 m, bed_in=100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 141.36363636363637 m, load_last <- load = 150 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 150.0,
+            "bed_in": 100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 141.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 150.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_52",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 17.272727272727266 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": 100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 17.272727272727266,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_53",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 58.636363636363633 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": 100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 58.63636363636363,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_54",
+          "description": "PointwiseIsostasy update at load=300 m, bed_in=100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = 100 m, load_last <- load = 300 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 300.0,
+            "bed_in": 100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": 100.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 300.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_55",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -175.75757575757575 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": 100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -175.75757575757575,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_56",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -134.39393939393941 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": 100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -134.3939393939394,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_57",
+          "description": "PointwiseIsostasy update at load=1000 m, bed_in=100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -93.030303030303031 m, load_last <- load = 1000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 1000.0,
+            "bed_in": 100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -93.03030303030303,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 1000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_58",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=100 m, load_last=0 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -451.5151515151515 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": 100.0,
+            "load_last": 0.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -451.5151515151515,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_59",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=100 m, load_last=150 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -410.15151515151513 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": 100.0,
+            "load_last": 150.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -410.1515151515151,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "update_law_tuple_60",
+          "description": "PointwiseIsostasy update at load=2000 m, bed_in=100 m, load_last=300 m, f=0.27575757575757576: bed_out = bed_in - f*(load - load_last) = -368.78787878787881 m, load_last <- load = 2000 m (stage1/dumps/bed/pointwise.csv).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load": 2000.0,
+            "bed_in": 100.0,
+            "load_last": 300.0,
+            "rho_ice": 910.0,
+            "rho_mantle": 3300.0
+          },
+          "assertions": [
+            {
+              "variable": "f",
+              "time": 0.0,
+              "expected": 0.27575757575757576,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out",
+              "time": 0.0,
+              "expected": -368.7878787878788,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "new_load_last",
+              "time": 0.0,
+              "expected": 2000.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "BedDefLoadAccumulator": {
+      "variables": {
+        "load_1": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "load at call 1 of the update interval (ice-equivalent m; the driver's per-call load)"
+        },
+        "load_2": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "load at call 2 of the update interval"
+        },
+        "load_3": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "load at call 3 of the update interval"
+        },
+        "load_4": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "load at call 4 of the update interval"
+        },
+        "load_5": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "load at call 5 of the update interval"
+        },
+        "dt_call": {
+          "type": "parameter",
+          "units": "s",
+          "default": 630720000.0,
+          "description": "driver call length (20 '365day years' = interval/5 in the stage1/dumps/bed run; 1 yr365 = 31536000 s)"
+        },
+        "dt_beddef": {
+          "type": "parameter",
+          "units": "s",
+          "default": 3153600000.0,
+          "description": "length of the update interval dt_beddef = t_final - m_t_last (100 '365day years'; the divisor of the load accumulator)"
+        },
+        "load_accumulator": {
+          "type": "unknown",
+          "units": "m s",
+          "description": "time-integrated load over the update interval, sum of load_k*dt_call over the calls that tile it (the C++ m_load_accumulator; the exact evaluation of the interval integral of the piecewise-constant load history)"
+        },
+        "load_avg": {
+          "type": "unknown",
+          "units": "m",
+          "description": "time-averaged load fed to update_impl: load_accumulator/dt_beddef (the C++ m_load = m_load_accumulator scaled by 1/dt_beddef)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "BedDef::update accumulate_load: the load accumulator is the time integral of the load over the update interval; for the piecewise-constant driver history (5 calls of length dt_call per interval, load_history.csv) this is the exact sum load_1*dt_call + ... + load_5*dt_call (the C++ m_load_accumulator.add(1.0, m_load, dt) per call).",
+          "lhs": "load_accumulator",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "load_1",
+                  "dt_call"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "load_2",
+                  "dt_call"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "load_3",
+                  "dt_call"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "load_4",
+                  "dt_call"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "load_5",
+                  "dt_call"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "BedDef::update at the update time: the time-averaged load is the accumulator divided by dt_beddef = t_final - m_t_last (the C++ computes m_load.scale(1.0/dt_beddef) -- a multiply by the reciprocal; the difference from division is at the 1-ulp level).",
+          "lhs": "load_avg",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "load_accumulator",
+              "dt_beddef"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "accumulator_dome_interval_1",
+          "description": "Interval-1 load accumulator at the dome cell (15,15), H0 = 2999.9999752362119 m: the five 20-yr calls carry loads H0 + {0,75,150,225,300} m (load_history.csv), so load_accumulator = sum(load_k*dt_call) and load_avg = load_accumulator/dt_beddef with dt_beddef = 5*dt_call = 100 '365day years' (the accumulator divide-by-dt_beddef subtlety: the time average of the ramp is exactly H0 + dH/2); the time-averaged load fed to update_impl is H0 + 150 m = 3149.9999752362119 m (columns.csv load_avg).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_1": 2999.999975236212,
+            "load_2": 3074.999975236212,
+            "load_3": 3149.999975236212,
+            "load_4": 3224.999975236212,
+            "load_5": 3299.999975236212,
+            "dt_call": 630720000.0,
+            "dt_beddef": 3153600000.0
+          },
+          "assertions": [
+            {
+              "variable": "load_avg",
+              "time": 0.0,
+              "expected": 3149.999975236212,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "accumulator_margin_interval_1",
+          "description": "Interval-1 load accumulator at the near-margin cell (5,7), H0 = 321.79367040294261 m (the smallest grounded ice thickness; FP round-off in the accumulator makes the dump's average differ from H0+150 by ~6e-14 m, reproduced here); the time-averaged load fed to update_impl is the dump's load_avg_1 = 471.79367040294255 m = 471.79367040294255 m (columns.csv load_avg).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_1": 321.7936704029426,
+            "load_2": 396.7936704029426,
+            "load_3": 471.7936704029426,
+            "load_4": 546.7936704029426,
+            "load_5": 621.7936704029426,
+            "dt_call": 630720000.0,
+            "dt_beddef": 3153600000.0
+          },
+          "assertions": [
+            {
+              "variable": "load_avg",
+              "time": 0.0,
+              "expected": 471.79367040294255,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "accumulator_dome_interval_2",
+          "description": "Interval-2 load accumulator at the dome cell (15,15): the load is constant at H0 + 300 m over all five 20-yr calls, so the time average is the constant load itself; the time-averaged load fed to update_impl is H0 + 300 m = 3299.9999752362119 m (columns.csv load_avg).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_1": 3299.999975236212,
+            "load_2": 3299.999975236212,
+            "load_3": 3299.999975236212,
+            "load_4": 3299.999975236212,
+            "load_5": 3299.999975236212,
+            "dt_call": 630720000.0,
+            "dt_beddef": 3153600000.0
+          },
+          "assertions": [
+            {
+              "variable": "load_avg",
+              "time": 0.0,
+              "expected": 3299.999975236212,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "accumulator_farfield",
+          "description": "Load accumulator on an ice-free far-field cell (0,0): every call carries load 0 (the driver passes H = 0 off the ice), so the average is exactly 0 and no compensation ever occurs; the time-averaged load fed to update_impl is 0 m = 0 m (columns.csv load_avg).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_1": 0.0,
+            "load_2": 0.0,
+            "load_3": 0.0,
+            "load_4": 0.0,
+            "load_5": 0.0,
+            "dt_call": 630720000.0,
+            "dt_beddef": 3153600000.0
+          },
+          "assertions": [
+            {
+              "variable": "load_avg",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "PointwiseIsostasyTwoIntervals": {
+      "expression_template_imports": [
+        {
+          "ref": "./bed_templates.esm"
+        }
+      ],
+      "variables": {
+        "bed_in_1": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "bed elevation at the start of interval 1 (the initial flat bed, topg_last before the first update)"
+        },
+        "load_last_0": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "load at the time of the previous update before interval 1 (m_load_last from init_impl: the load of the initial geometry -- H0 on grounded ice cells)"
+        },
+        "load_avg_1": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "time-averaged load over interval 1 (H0 + 150 m in the stage1/dumps/bed run)"
+        },
+        "load_avg_2": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "time-averaged load over interval 2 (H0 + 300 m in the stage1/dumps/bed run)"
+        },
+        "rho_ice": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density (constants.ice.density)"
+        },
+        "rho_mantle": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 3300.0,
+          "description": "mantle density (bed_deformation.mantle_density)"
+        },
+        "dt_beddef": {
+          "type": "parameter",
+          "units": "s",
+          "default": 3153600000.0,
+          "description": "update interval length (100 '365day years')"
+        },
+        "bed_out_1": {
+          "type": "unknown",
+          "units": "m",
+          "description": "bed elevation after update 1: bed_in_1 - f*(load_avg_1 - load_last_0) (= -f*150 m under the ice)"
+        },
+        "load_last_1": {
+          "type": "unknown",
+          "units": "m",
+          "description": "load_last after update 1: load_last <- load_avg_1"
+        },
+        "uplift_1": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "bedrock uplift rate over interval 1: (bed_out_1 - bed_in_1)/dt_beddef"
+        },
+        "bed_out_2": {
+          "type": "unknown",
+          "units": "m",
+          "description": "bed elevation after update 2: bed_out_1 - f*(load_avg_2 - load_last_1) (= -f*300 m under the ice)"
+        },
+        "load_last_2": {
+          "type": "unknown",
+          "units": "m",
+          "description": "load_last after update 2: load_last <- load_avg_2"
+        },
+        "uplift_2": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "bedrock uplift rate over interval 2: (bed_out_2 - bed_out_1)/dt_beddef"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Update 1 (PointwiseIsostasy::update_impl consuming the time-averaged load of interval 1): bed_out_1 = bed_in_1 - f*(load_avg_1 - load_last_0).",
+          "lhs": "bed_out_1",
+          "rhs": {
+            "op": "isostatic_bed_update",
+            "args": [
+              "bed_in_1",
+              "load_avg_1",
+              "load_last_0",
+              "rho_ice",
+              "rho_mantle"
+            ]
+          }
+        },
+        {
+          "_comment": "Update 1: load_last <- load_avg_1.",
+          "lhs": "load_last_1",
+          "rhs": "load_avg_1"
+        },
+        {
+          "_comment": "BedDef::update after update_impl: uplift_1 = (topg - topg_last)/dt_beddef, topg_last <- topg (the C++ computes uplift = (topg - topg_last)*(1/dt_beddef)).",
+          "lhs": "uplift_1",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "bed_out_1",
+                  "bed_in_1"
+                ]
+              },
+              "dt_beddef"
+            ]
+          }
+        },
+        {
+          "_comment": "Update 2 (the load of interval 2 is compared against load_last_1 = load_avg_1, and the bed against bed_out_1): bed_out_2 = bed_out_1 - f*(load_avg_2 - load_last_1).",
+          "lhs": "bed_out_2",
+          "rhs": {
+            "op": "isostatic_bed_update",
+            "args": [
+              "bed_out_1",
+              "load_avg_2",
+              "load_last_1",
+              "rho_ice",
+              "rho_mantle"
+            ]
+          }
+        },
+        {
+          "_comment": "Update 2: load_last <- load_avg_2.",
+          "lhs": "load_last_2",
+          "rhs": "load_avg_2"
+        },
+        {
+          "_comment": "BedDef::update after update_impl: uplift_2 = (topg - topg_last)/dt_beddef over interval 2.",
+          "lhs": "uplift_2",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "bed_out_2",
+                  "bed_out_1"
+                ]
+              },
+              "dt_beddef"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "two_intervals_15_15",
+          "description": "Two full update intervals of bed::PointwiseIsostasy at dome cell (15,15) (the dome, H0 = 2999.9999752362119 m): load_last starts at the initial load H0 = 2999.9999752362119 m (init_impl), update 1 consumes load_avg_1 = 3149.9999752362119 m and update 2 load_avg_2 = 3299.9999752362119 m, each with uplift = (bed_out - bed_in)/dt_beddef, dt_beddef = 100 '365day years' (stage1/dumps/bed/columns.csv). bed_out_1 = -f*150 m, bed_out_2 = -f*300 m (a load change is fully compensated in the single update that follows it).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_last_0": 2999.999975236212,
+            "load_avg_1": 3149.999975236212,
+            "load_avg_2": 3299.999975236212,
+            "bed_in_1": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "bed_out_1",
+              "time": 0.0,
+              "expected": -41.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_1",
+              "time": 0.0,
+              "expected": -1.3116323047829898e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out_2",
+              "time": 0.0,
+              "expected": -82.72727272727273,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_2",
+              "time": 0.0,
+              "expected": -1.3116323047829898e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_1",
+              "time": 0.0,
+              "expected": 3149.999975236212,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_2",
+              "time": 0.0,
+              "expected": 3299.999975236212,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "two_intervals_14_15",
+          "description": "Two full update intervals of bed::PointwiseIsostasy at near-dome cell (14,15) (a cell whose accumulator round-off makes the dumped bed differ from -f*150 in the 15th digit): load_last starts at the initial load H0 = 2945.7933387368698 m (init_impl), update 1 consumes load_avg_1 = 3095.7933387368703 m and update 2 load_avg_2 = 3245.7933387368703 m, each with uplift = (bed_out - bed_in)/dt_beddef, dt_beddef = 100 '365day years' (stage1/dumps/bed/columns.csv). bed_out_1 = -f*150 m, bed_out_2 = -f*300 m (a load change is fully compensated in the single update that follows it).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_last_0": 2945.79333873687,
+            "load_avg_1": 3095.7933387368703,
+            "load_avg_2": 3245.7933387368703,
+            "bed_in_1": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "bed_out_1",
+              "time": 0.0,
+              "expected": -41.36363636363649,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_1",
+              "time": 0.0,
+              "expected": -1.3116323047829936e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out_2",
+              "time": 0.0,
+              "expected": -82.72727272727286,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_2",
+              "time": 0.0,
+              "expected": -1.3116323047829901e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_1",
+              "time": 0.0,
+              "expected": 3095.7933387368703,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_2",
+              "time": 0.0,
+              "expected": 3245.7933387368703,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "two_intervals_11_3",
+          "description": "Two full update intervals of bed::PointwiseIsostasy at mid-radius cell (11,3) (mid-radius, H0 = 499.48437574022 m): load_last starts at the initial load H0 = 499.48437574022 m (init_impl), update 1 consumes load_avg_1 = 649.48437574022 m and update 2 load_avg_2 = 799.48437574022 m, each with uplift = (bed_out - bed_in)/dt_beddef, dt_beddef = 100 '365day years' (stage1/dumps/bed/columns.csv). bed_out_1 = -f*150 m, bed_out_2 = -f*300 m (a load change is fully compensated in the single update that follows it).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_last_0": 499.48437574022,
+            "load_avg_1": 649.48437574022,
+            "load_avg_2": 799.48437574022,
+            "bed_in_1": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "bed_out_1",
+              "time": 0.0,
+              "expected": -41.36363636363637,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_1",
+              "time": 0.0,
+              "expected": -1.3116323047829898e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out_2",
+              "time": 0.0,
+              "expected": -82.72727272727273,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_2",
+              "time": 0.0,
+              "expected": -1.3116323047829898e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_1",
+              "time": 0.0,
+              "expected": 649.48437574022,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_2",
+              "time": 0.0,
+              "expected": 799.48437574022,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "two_intervals_5_7",
+          "description": "Two full update intervals of bed::PointwiseIsostasy at near-margin cell (5,7) (the smallest grounded thickness, H0 = 321.79367040294261 m): load_last starts at the initial load H0 = 321.79367040294261 m (init_impl), update 1 consumes load_avg_1 = 471.79367040294255 m and update 2 load_avg_2 = 621.79367040294255 m, each with uplift = (bed_out - bed_in)/dt_beddef, dt_beddef = 100 '365day years' (stage1/dumps/bed/columns.csv). bed_out_1 = -f*150 m, bed_out_2 = -f*300 m (a load change is fully compensated in the single update that follows it).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_last_0": 321.7936704029426,
+            "load_avg_1": 471.79367040294255,
+            "load_avg_2": 621.7936704029426,
+            "bed_in_1": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "bed_out_1",
+              "time": 0.0,
+              "expected": -41.363636363636346,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_1",
+              "time": 0.0,
+              "expected": -1.3116323047829891e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out_2",
+              "time": 0.0,
+              "expected": -82.72727272727272,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_2",
+              "time": 0.0,
+              "expected": -1.3116323047829901e-08,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_1",
+              "time": 0.0,
+              "expected": 471.79367040294255,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_2",
+              "time": 0.0,
+              "expected": 621.7936704029426,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "two_intervals_0_0",
+          "description": "Two full update intervals of bed::PointwiseIsostasy at ice-free far-field cell (0,0) (no ice: loads and bed stay 0): load_last starts at the initial load H0 = 0 m (init_impl), update 1 consumes load_avg_1 = 0 m and update 2 load_avg_2 = 0 m, each with uplift = (bed_out - bed_in)/dt_beddef, dt_beddef = 100 '365day years' (stage1/dumps/bed/columns.csv). Ice-free: no load, no load change, so bed_out == bed_in == 0 in both intervals.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_last_0": 0.0,
+            "load_avg_1": 0.0,
+            "load_avg_2": 0.0,
+            "bed_in_1": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "bed_out_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "two_intervals_30_30",
+          "description": "Two full update intervals of bed::PointwiseIsostasy at ice-free far-field cell (30,30) (no ice: loads and bed stay 0): load_last starts at the initial load H0 = 0 m (init_impl), update 1 consumes load_avg_1 = 0 m and update 2 load_avg_2 = 0 m, each with uplift = (bed_out - bed_in)/dt_beddef, dt_beddef = 100 '365day years' (stage1/dumps/bed/columns.csv). Ice-free: no load, no load change, so bed_out == bed_in == 0 in both intervals.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_last_0": 0.0,
+            "load_avg_1": 0.0,
+            "load_avg_2": 0.0,
+            "bed_in_1": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "bed_out_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        },
+        {
+          "id": "two_intervals_15_0",
+          "description": "Two full update intervals of bed::PointwiseIsostasy at ice-free far-field cell (15,0) (no ice: loads and bed stay 0): load_last starts at the initial load H0 = 0 m (init_impl), update 1 consumes load_avg_1 = 0 m and update 2 load_avg_2 = 0 m, each with uplift = (bed_out - bed_in)/dt_beddef, dt_beddef = 100 '365day years' (stage1/dumps/bed/columns.csv). Ice-free: no load, no load change, so bed_out == bed_in == 0 in both intervals.",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "parameter_overrides": {
+            "load_last_0": 0.0,
+            "load_avg_1": 0.0,
+            "load_avg_2": 0.0,
+            "bed_in_1": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "bed_out_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "bed_out_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "uplift_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_1",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            },
+            {
+              "variable": "load_last_2",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "rel": 1e-12
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

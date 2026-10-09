@@ -1,0 +1,71 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "bed_templates",
+    "description": "Expression-template library for the PISM bed-deformation component (stage 2 of the eqice project). Carries the pointwise laws of the bed boundary: the ice-equivalent load transmitted to the bed (ice_load = H, ocean_load = (rho_sea_water/rho_ice)*max(sea_level - bed, 0), the load of floating ice excluded: load = ice_load if ice_load > ocean_load else 0 -- the C++ compute_load), the isostatic compensation factor f = rho_ice/rho_mantle, and the instantaneous PointwiseIsostasy update topg_out = bed_in - f*(load - load_last) with load_last <- load (no relaxation time: a load change is fully compensated in the single update that follows it; the exponential viscous relaxation belongs to the Lingle-Clark model, deferred). Free names in template bodies resolve against the importing model's declared parameters (esm-spec 9.6.1). Reference implementation: PISM v2.3.2 (stage1/pism/src/earth/BedDef.cc compute_load/accumulate_load, PointwiseIsostasy.cc update_impl)."
+  },
+  "expression_templates": {
+    "isostatic_compensation_factor": {
+      "description": "Isostatic compensation factor f = rho_ice/rho_mantle (PointwiseIsostasy::update_impl; bed_deformation.mantle_density / constants.ice.density).",
+      "params": ["rho_ice", "rho_mantle"],
+      "match": { "op": "isostatic_compensation_factor", "args": ["rho_ice", "rho_mantle"] },
+      "body": {
+        "op": "/",
+        "args": ["rho_ice", "rho_mantle"]
+      }
+    },
+    "bed_ocean_depth": {
+      "description": "Ocean depth at a cell: max(sea_level - bed, 0) (the C++ ocean_depth of compute_load).",
+      "params": ["sea_level", "bed"],
+      "match": { "op": "bed_ocean_depth", "args": ["sea_level", "bed"] },
+      "body": {
+        "op": "max",
+        "args": [
+          { "op": "-", "args": ["sea_level", "bed"] },
+          0.0
+        ]
+      }
+    },
+    "bed_ocean_load": {
+      "description": "Ocean (seawater) load expressed in ice-equivalent thickness: (rho_sea_water/rho_ice)*ocean_depth (the C++ ocean_load of compute_load; constants.sea_water.density / constants.ice.density).",
+      "params": ["rho_sea_water", "rho_ice", "ocean_depth"],
+      "match": { "op": "bed_ocean_load", "args": ["rho_sea_water", "rho_ice", "ocean_depth"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "/", "args": ["rho_sea_water", "rho_ice"] },
+          "ocean_depth"
+        ]
+      }
+    },
+    "bed_load": {
+      "description": "Load transmitted to the bed in ice-equivalent thickness: ice_load = H if H > ocean_load else 0 -- the load of floating (buoyant) ice is excluded (the C++ return of compute_load: ice_load > ocean_load ? ice_load : 0).",
+      "params": ["ice_thickness", "ocean_load"],
+      "match": { "op": "bed_load", "args": ["ice_thickness", "ocean_load"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": ["ice_thickness", "ocean_load"] },
+          "ice_thickness",
+          0.0
+        ]
+      }
+    },
+    "isostatic_bed_update": {
+      "description": "The instantaneous PointwiseIsostasy update: topg_out = bed_in - f*(load - load_last) with f = rho_ice/rho_mantle; the load change load - load_last since the previous update is fully compensated (PointwiseIsostasy::update_impl; the companion new_load_last = load is applied by the caller).",
+      "params": ["bed_in", "load", "load_last", "rho_ice", "rho_mantle"],
+      "match": { "op": "isostatic_bed_update", "args": ["bed_in", "load", "load_last", "rho_ice", "rho_mantle"] },
+      "body": {
+        "op": "-",
+        "args": [
+          "bed_in",
+          { "op": "*",
+            "args": [
+              { "op": "isostatic_compensation_factor", "args": ["rho_ice", "rho_mantle"] },
+              { "op": "-", "args": ["load", "load_last"] }
+            ] }
+        ]
+      }
+    }
+  }
+}
