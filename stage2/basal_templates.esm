@@ -1,0 +1,227 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "basal_templates",
+    "description": "Expression-template library for the PISM basal-strength component (stage 2 of the eqice project). Carries the Mohr-Coulomb till pointwise map (effective pressure N_till = min(P, N0 (delta P / N0)^s 10^((e0/Cc)(1-s))), yield stress tauc = c0 + tan(phi) N_till, and its inverse till friction angle), the overburden pressure, and the three IceBasalResistance drag laws with their derivatives with respect to alpha = 0.5 |v|^2 (plastic, pseudo-plastic, and regularized Coulomb; each law a separate template so the SSA component can import the one selected by stress_balance.ssa.basal_drag.law -- PISM's default SSA uses the purely-plastic law with the 0.01 m/yr Schoof regularization). Free names in template bodies (W_till_max, till_cohesion, N0, e0, Cc, rho_ice, ...) resolve against the importing model's declared parameters (esm-spec 9.6.1). Reference implementation: PISM v2.3.2 (stage1/pism/src/basalstrength/MohrCoulombPointwise.cc, MohrCoulombYieldStress.cc, basal_resistance.cc)."
+  },
+  "expression_templates": {
+    "overburden_pressure": {
+      "description": "Ice overburden pressure P = rho_ice * g * H (MohrCoulombYieldStress::update_impl).",
+      "params": ["rho_ice", "g", "H"],
+      "match": { "op": "overburden_pressure", "args": ["rho_ice", "g", "H"] },
+      "body": {
+        "op": "*",
+        "args": ["rho_ice", "g", "H"]
+      }
+    },
+    "mohr_coulomb_N_interior": {
+      "description": "Un-clamped Tulaczyk et al. (2000) effective pressure N_interior = N0 * (delta*P/N0)^s * 10^((e0/Cc)*(1-s)) with s = water_thickness/W_till_max (MohrCoulombPointwise::effective_pressure; the 10^ factor is the e0/Cc compressibility branch).",
+      "params": ["delta", "P_overburden", "water_thickness"],
+      "match": { "op": "mohr_coulomb_N_interior", "args": ["delta", "P_overburden", "water_thickness"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "N0",
+          { "op": "^",
+            "args": [
+              { "op": "/",
+                "args": [ { "op": "*", "args": ["delta", "P_overburden"] }, "N0" ] },
+              { "op": "/", "args": ["water_thickness", "W_till_max"] }
+            ] },
+          { "op": "^",
+            "args": [
+              10.0,
+              { "op": "*",
+                "args": [
+                  { "op": "/", "args": ["e0", "Cc"] },
+                  { "op": "-",
+                    "args": [ 1.0, { "op": "/", "args": ["water_thickness", "W_till_max"] } ] }
+                ] }
+            ] }
+        ]
+      }
+    },
+    "mohr_coulomb_effective_pressure": {
+      "description": "Effective pressure on till N_till = min(P_overburden, N_interior) with the Tulaczyk saturation clamp (MohrCoulombPointwise::effective_pressure).",
+      "params": ["delta", "P_overburden", "water_thickness"],
+      "match": { "op": "mohr_coulomb_effective_pressure", "args": ["delta", "P_overburden", "water_thickness"] },
+      "body": {
+        "op": "min",
+        "args": [
+          "P_overburden",
+          { "op": "mohr_coulomb_N_interior", "args": ["delta", "P_overburden", "water_thickness"] }
+        ]
+      }
+    },
+    "mohr_coulomb_yield_stress": {
+      "description": "Mohr-Coulomb yield stress tauc = c0 + tan(phi) N_till with phi in degrees (MohrCoulombPointwise::yield_stress).",
+      "params": ["N_till", "phi_deg", "till_cohesion"],
+      "match": { "op": "mohr_coulomb_yield_stress", "args": ["N_till", "phi_deg", "till_cohesion"] },
+      "body": {
+        "op": "+",
+        "args": [
+          "till_cohesion",
+          { "op": "*",
+            "args": [
+              "N_till",
+              { "op": "tan",
+                "args": [ { "op": "*",
+                            "args": [ { "op": "/", "args": [3.141592653589793, 180.0] }, "phi_deg" ] } ] }
+            ] }
+        ]
+      }
+    },
+    "mohr_coulomb_friction_angle": {
+      "description": "Inverse of the Mohr-Coulomb yield stress: phi = (180/pi) * atan((tauc - c0)/N_till) in degrees (MohrCoulombPointwise::till_friction_angle).",
+      "params": ["N_till", "tauc", "till_cohesion"],
+      "match": { "op": "mohr_coulomb_friction_angle", "args": ["N_till", "tauc", "till_cohesion"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "/", "args": [180.0, 3.141592653589793] },
+          { "op": "atan",
+            "args": [ { "op": "/",
+                        "args": [ { "op": "-", "args": ["tauc", "till_cohesion"] }, "N_till" ] } ] }
+        ]
+      }
+    },
+    "basal_speed_squared": {
+      "description": "Regularized squared sliding speed magreg2 = eps^2 + vx^2 + vy^2 with eps the plastic regularization (the Schoof epsilon of IceBasalResistancePlasticLaw; shared by all three drag laws).",
+      "params": ["eps", "vx", "vy"],
+      "match": { "op": "basal_speed_squared", "args": ["eps", "vx", "vy"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "^", "args": ["eps", 2] },
+          { "op": "^", "args": ["vx", 2] },
+          { "op": "^", "args": ["vy", 2] }
+        ]
+      }
+    },
+    "basal_speed": {
+      "description": "Regularized sliding speed |v_reg| = sqrt(eps^2 + vx^2 + vy^2) (IceBasalResistanceRegularizedLaw).",
+      "params": ["eps", "vx", "vy"],
+      "match": { "op": "basal_speed", "args": ["eps", "vx", "vy"] },
+      "body": {
+        "op": "sqrt",
+        "args": [ { "op": "basal_speed_squared", "args": ["eps", "vx", "vy"] } ]
+      }
+    },
+    "plastic_drag": {
+      "description": "Purely-plastic drag coefficient beta = tauc / sqrt(eps^2 + vx^2 + vy^2) (IceBasalResistancePlasticLaw::drag; PISM's default SSA basal sliding law).",
+      "params": ["tauc", "eps", "vx", "vy"],
+      "match": { "op": "plastic_drag", "args": ["tauc", "eps", "vx", "vy"] },
+      "body": {
+        "op": "/",
+        "args": [
+          "tauc",
+          { "op": "basal_speed", "args": ["eps", "vx", "vy"] }
+        ]
+      }
+    },
+    "plastic_drag_derivative": {
+      "description": "d(beta)/d(alpha) for the plastic law with alpha = 0.5 |v|^2: dbeta = -beta / (eps^2 + vx^2 + vy^2) (IceBasalResistancePlasticLaw::drag_with_derivative).",
+      "params": ["tauc", "eps", "vx", "vy"],
+      "match": { "op": "plastic_drag_derivative", "args": ["tauc", "eps", "vx", "vy"] },
+      "body": {
+        "op": "/",
+        "args": [
+          { "op": "-",
+            "args": [ { "op": "plastic_drag", "args": ["tauc", "eps", "vx", "vy"] } ] },
+          { "op": "basal_speed_squared", "args": ["eps", "vx", "vy"] }
+        ]
+      }
+    },
+    "pseudo_plastic_drag": {
+      "description": "Pseudo-plastic drag coefficient beta = tauc * (eps^2 + vx^2 + vy^2)^((q-1)/2) * u_threshold^(-q) (IceBasalResistancePseudoPlasticLaw::drag; the sliding_scale_factor branch is off by default: the config value is -1, so Aq = 1).",
+      "params": ["tauc", "q", "u_threshold", "eps", "vx", "vy"],
+      "match": { "op": "pseudo_plastic_drag", "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "tauc",
+          { "op": "^",
+            "args": [
+              { "op": "basal_speed_squared", "args": ["eps", "vx", "vy"] },
+              { "op": "/", "args": [ { "op": "-", "args": ["q", 1.0] }, 2.0 ] }
+            ] },
+          { "op": "^",
+            "args": [ "u_threshold", { "op": "-", "args": ["q"] } ] }
+        ]
+      }
+    },
+    "pseudo_plastic_drag_derivative": {
+      "description": "d(beta)/d(alpha) for the pseudo-plastic law: dbeta = (q-1) * beta / (eps^2 + vx^2 + vy^2) (IceBasalResistancePseudoPlasticLaw::drag_with_derivative).",
+      "params": ["tauc", "q", "u_threshold", "eps", "vx", "vy"],
+      "match": { "op": "pseudo_plastic_drag_derivative", "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"] },
+      "body": {
+        "op": "/",
+        "args": [
+          { "op": "*",
+            "args": [
+              { "op": "-", "args": ["q", 1.0] },
+              { "op": "pseudo_plastic_drag", "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"] }
+            ] },
+          { "op": "basal_speed_squared", "args": ["eps", "vx", "vy"] }
+        ]
+      }
+    },
+    "regularized_drag": {
+      "description": "Regularized Coulomb drag coefficient beta = tauc * magreg2^((q-1)/2) * (magreg2^(1/2) + u_threshold)^(-q) (IceBasalResistanceRegularizedLaw::drag, Zoet et al. 2020).",
+      "params": ["tauc", "q", "u_threshold", "eps", "vx", "vy"],
+      "match": { "op": "regularized_drag", "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "tauc",
+          { "op": "^",
+            "args": [
+              { "op": "basal_speed", "args": ["eps", "vx", "vy"] },
+              { "op": "-", "args": ["q", 1.0] }
+            ] },
+          { "op": "^",
+            "args": [
+              { "op": "+",
+                "args": [
+                  { "op": "basal_speed", "args": ["eps", "vx", "vy"] },
+                  "u_threshold"
+                ] },
+              { "op": "-", "args": ["q"] }
+            ] }
+        ]
+      }
+    },
+    "regularized_drag_derivative": {
+      "description": "d(beta)/d(alpha) for the regularized law: dbeta = ((q-1)/magreg2 - q/(|v_reg|*(|v_reg|+u_threshold))) * beta (IceBasalResistanceRegularizedLaw::drag_with_derivative).",
+      "params": ["tauc", "q", "u_threshold", "eps", "vx", "vy"],
+      "match": { "op": "regularized_drag_derivative", "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "-",
+            "args": [
+              { "op": "/",
+                "args": [
+                  { "op": "-", "args": ["q", 1.0] },
+                  { "op": "basal_speed_squared", "args": ["eps", "vx", "vy"] }
+                ] },
+              { "op": "/",
+                "args": [
+                  "q",
+                  { "op": "*",
+                    "args": [
+                      { "op": "basal_speed", "args": ["eps", "vx", "vy"] },
+                      { "op": "+",
+                        "args": [
+                          { "op": "basal_speed", "args": ["eps", "vx", "vy"] },
+                          "u_threshold"
+                        ] }
+                    ] }
+                ] }
+            ] },
+          { "op": "regularized_drag", "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"] }
+        ]
+      }
+    }
+  }
+}
