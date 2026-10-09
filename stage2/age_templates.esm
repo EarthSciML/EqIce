@@ -1,0 +1,96 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "age_templates",
+    "description": "Expression-template library for the PISM ice-age model component (stage 2 of the eqice project): the first-order-upwind discretization of the advection terms of the age equation and the fixed storage-to-fine-grid interpolation weight of the C++ AgeColumnSystem. The age PDE solved by the C++ model is d(tau)/dt + u*d(tau)/dx + v*d(tau)/dy + w*d(tau)/dz = 1, discretized in AgeColumnSystem::solve with lowest-order upwinding, implicit in the vertical and explicit (at old time) in the horizontal, on the fine vertical grid built by columnSystemCtx. age_vertical_advection is the upwind vertical derivative w*d(tau)/dz (the implicit-in-vertical part); age_horizontal_advection is the upwind horizontal derivative u*d(tau)/dx + v*d(tau)/dy evaluated at the old time from the consumer-supplied neighbor-column ages (the explicit-at-old-time part, zero when the whole domain starts at age 0); age_storage_interpolate is the linear-in-level interpolation from the fine solution back to the storage (dump) grid used by AgeModel::fine_to_coarse. Free names in template bodies (the grid spacings dz, dx, dy) resolve against the importing model's declared parameters (esm-spec 9.6.1), following the consumer-supplied-geometry contract of the EarthSciDiscretizations upwind rules; a future EarthSciDiscretizations PR can lift these bodies into proper D-operator rules on a uniform vertical grid. Reference implementation: PISM v2.3.2 (stage1/pism/src/age/AgeColumnSystem.cc, AgeModel.cc; stage1/pism/src/util/ColumnSystem.cc, ColumnInterpolation.cc)."
+  },
+  "expression_templates": {
+    "age_vertical_advection": {
+      "description": "First-order-upwind vertical advection w*d(tau)/dz at one fine-grid level (the implicit-in-vertical operator of AgeColumnSystem::solve, rows k=0..ks-1): for w > 0 (upward transport) the upwind derivative is (tau_i - tau_up)/dz, for w <= 0 (downward transport) it is (tau_down - tau_i)/dz, where tau_up/tau_down are the levels immediately below/above the cell (the C++ AA >= 0 / AA < 0 branches of the tridiagonal row; the strict w > 0 test matches the C++ AA > 0 basal-row test and keeps the base cell (which never enters the interior branch with w > 0) from reading a ghost level below the bed).",
+      "params": ["tau_i", "tau_up", "tau_down", "w"],
+      "match": { "op": "age_vertical_advection", "args": ["tau_i", "tau_up", "tau_down", "w"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": ["w", 0.0] },
+          {
+            "op": "*",
+            "args": [
+              "w",
+              { "op": "/", "args": [{ "op": "-", "args": ["tau_i", "tau_up"] }, "dz"] }
+            ]
+          },
+          {
+            "op": "*",
+            "args": [
+              "w",
+              { "op": "/", "args": [{ "op": "-", "args": ["tau_down", "tau_i"] }, "dz"] }
+            ]
+          }
+        ]
+      }
+    },
+    "age_horizontal_advection": {
+      "description": "First-order-upwind horizontal advection u*d(tau)/dx + v*d(tau)/dy at one fine-grid level, evaluated at the OLD time from the neighbor-column ages (the explicit-at-old-time horizontal term of AgeColumnSystem::solve, RHS(k) = m_u[k]*(m_A[k]-m_A_w[k])/dx or m_u[k]*(m_A_e[k]-m_A[k])/dx by sign, and likewise in y): tau_w/tau_e/tau_s/tau_n are the old-time ages of the four horizontal neighbor columns on the fine grid (consumer-supplied inputs; in the single-column test run they are all zero because the whole domain starts at age 0, so the horizontal term vanishes and the dump is reproduced), tau_i is the current column's age, u/v the fine-grid horizontal velocity components, dx/dy the horizontal grid spacings.",
+      "params": ["tau_i", "tau_w", "tau_e", "tau_s", "tau_n", "u", "v"],
+      "match": { "op": "age_horizontal_advection", "args": ["tau_i", "tau_w", "tau_e", "tau_s", "tau_n", "u", "v"] },
+      "body": {
+        "op": "+",
+        "args": [
+          {
+            "op": "ifelse",
+            "args": [
+              { "op": "<", "args": ["u", 0.0] },
+              {
+                "op": "*",
+                "args": [
+                  "u",
+                  { "op": "/", "args": [{ "op": "-", "args": ["tau_e", "tau_i"] }, "dx"] }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "u",
+                  { "op": "/", "args": [{ "op": "-", "args": ["tau_i", "tau_w"] }, "dx"] }
+                ]
+              }
+            ]
+          },
+          {
+            "op": "ifelse",
+            "args": [
+              { "op": "<", "args": ["v", 0.0] },
+              {
+                "op": "*",
+                "args": [
+                  "v",
+                  { "op": "/", "args": [{ "op": "-", "args": ["tau_n", "tau_i"] }, "dy"] }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "v",
+                  { "op": "/", "args": [{ "op": "-", "args": ["tau_i", "tau_s"] }, "dy"] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "age_storage_interpolate": {
+      "description": "Linear-in-level interpolation of one storage-grid (dump-grid) level from the fine-grid solution: storage level k sits between fine levels k and k+1 with the fixed weight w = (k-1)/60 of fine level k+1 (the C++ AgeModel::fine_to_coarse interpolation, which for the coarse/fine grids of this run is exactly the linear-in-level map tau_storage[k] = (1-w)*tau_fine[k] + w*tau_fine[k+1], w = (k-1)/60 for k = 1..60; the top storage level 61 is fine level 62 itself). The consumer passes w; the weight makes the mapping exact for linear profiles and reproduces the dump grid exactly.",
+      "params": ["tau_k", "tau_kp1", "w"],
+      "match": { "op": "age_storage_interpolate", "args": ["tau_k", "tau_kp1", "w"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "*", "args": [{ "op": "-", "args": [1.0, "w"] }, "tau_k"] },
+          { "op": "*", "args": ["w", "tau_kp1"] }
+        ]
+      }
+    }
+  }
+}
