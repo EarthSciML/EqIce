@@ -1,0 +1,1273 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ocean_coupling",
+    "description": "PISM ocean-coupling component (stage 2 of the eqice project): the PIK ocean (ocean::PIK, the Beckmann-Goosse-style sub-shelf parameterization of Martin et al. 2011 -- shelf_base_temperature = the linear pressure melting point T0 - beta_CC*rho_i*g*H, the shelf_base_mass_flux chain z_b -> T_f -> Q -> Q/L with z_b = -(rho_i/rho_w)*H, T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) and Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f), positive = melting) and the average_water_column_pressure integral at a margin (ice_bottom = max(bed, z_s - rho_i/rho_w*H), h_w = max(z_s - ice_bottom, 0), P = 0.5*rho_w*g*h_w^2/H for H > 0, else 0), plus the Constant ocean cross-check (ocean::Constant: the same pressure melting point and water column pressure, with a uniform shelf_base_mass_flux = melt_rate*rho_i). All shared math is imported by reference from ./surface_forcing_templates.esm. Tests assert the instantaneous boundary outputs dumped by the instrumented PISM v2.3.2 run (stage1/dumps/surface_ocean/). Deferred: PICO, the holland_jenkins / thin-film (GivenTH) parameterizations, the delta_T / delta_SMB / delta_MBP / frac_MBP / frac_SMB / anomaly modifiers, runoff_to_ocean_melt, ocean.sub_shelf_heat_flux_into_ice, sea-level coupling, and frontal-melt physics."
+  },
+  "models": {
+    "OceanPIK": {
+      "expression_template_imports": [
+        {
+          "ref": "./surface_forcing_templates.esm"
+        }
+      ],
+      "variables": {
+        "H_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2999.9999752362119,
+          "description": "ice thickness (geometry.ice_thickness); the dome cell value"
+        },
+        "bed_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": -1509.4947867712904,
+          "description": "bed elevation (geometry.bed_elevation); the dome cell value"
+        },
+        "z_s_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "sea level elevation (geometry.sea_level_elevation)"
+        },
+        "T_ocean_K": {
+          "type": "parameter",
+          "units": "K",
+          "default": 271.45,
+          "description": "ocean temperature T_ocean = -1.7 deg C (hard-coded default in ConstantPIK.cc)"
+        },
+        "salinity": {
+          "type": "parameter",
+          "units": "g/kg",
+          "default": 35.0,
+          "description": "ocean salinity, g/kg (hard-coded in ConstantPIK.cc)"
+        },
+        "T0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_CC": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "rho_i": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density (constants.ice.density)"
+        },
+        "rho_w": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 1028.0,
+          "description": "sea water density (constants.sea_water.density)"
+        },
+        "g": {
+          "type": "parameter",
+          "units": "m/s^2",
+          "default": 9.81,
+          "description": "standard gravity (constants.standard_gravity)"
+        },
+        "melt_factor": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.005,
+          "description": "ocean.pik_melt_factor"
+        },
+        "c_p_ocean": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 3974.0,
+          "description": "specific heat capacity of the ocean mixed layer (hard-coded 3974 J/(K kg) in ConstantPIK.cc)"
+        },
+        "gamma_T": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0001,
+          "description": "thermal exchange velocity (hard-coded 1e-4 m/s in ConstantPIK.cc)"
+        },
+        "L": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "shelf_base_temperature": {
+          "type": "unknown",
+          "units": "K",
+          "description": "shelf base temperature = linear pressure melting point T0 - beta_CC*rho_i*g*H (ocean::PIK::melting_point_temperature; DEcreases with ice thickness)"
+        },
+        "shelf_base_elevation": {
+          "type": "unknown",
+          "units": "m",
+          "description": "shelf base elevation z_b = -(rho_i/rho_w)*H (ocean::PIK::mass_flux)"
+        },
+        "freezing_temperature": {
+          "type": "unknown",
+          "units": "K",
+          "description": "freezing temperature of ocean water under the shelf T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) (Beckmann & Goosse 2003 eq. 2)"
+        },
+        "ocean_heat_flux": {
+          "type": "unknown",
+          "units": "W/m^2",
+          "description": "ocean-to-ice heat flux Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f); positive when T_ocean > T_f (melting)"
+        },
+        "shelf_base_mass_flux": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "shelf base mass flux = Q/L (positive = melting; the geometry update has dH_BMB = -dt*mf/rho_i)"
+        },
+        "ice_bottom": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ice bottom elevation ice_bottom = max(bed, z_s - rho_i/rho_w*H) (pism::average_water_column_pressure)"
+        },
+        "water_column_height": {
+          "type": "unknown",
+          "units": "m",
+          "description": "water column height h_w = max(z_s - ice_bottom, 0) (pism::average_water_column_pressure)"
+        },
+        "average_water_column_pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "vertically-averaged water column pressure over an ice cliff at a margin P = 0.5*rho_w*g*h_w^2/H for H > 0, else 0 (pism::average_water_column_pressure)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "ocean::PIK::melting_point_temperature: T_shelf = T0 - beta_CC*rho_i*g*H, the linear pressure melting point (identical in ocean::Constant).",
+          "lhs": "shelf_base_temperature",
+          "rhs": {
+            "op": "shelf_base_temperature",
+            "args": ["H_m"]
+          }
+        },
+        {
+          "_comment": "ocean::PIK::mass_flux, first step: the shelf base elevation z_b = -(rho_i/rho_w)*H.",
+          "lhs": "shelf_base_elevation",
+          "rhs": {
+            "op": "shelf_base_elevation",
+            "args": ["H_m"]
+          }
+        },
+        {
+          "_comment": "ocean::PIK::mass_flux: the freezing temperature T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) (Beckmann & Goosse 2003 eq. 2).",
+          "lhs": "freezing_temperature",
+          "rhs": {
+            "op": "beckmann_goosse_freezing_temperature",
+            "args": ["shelf_base_elevation"]
+          }
+        },
+        {
+          "_comment": "ocean::PIK::mass_flux: the ocean-to-ice heat flux Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) in W/m^2.",
+          "lhs": "ocean_heat_flux",
+          "rhs": {
+            "op": "ocean_to_ice_heat_flux",
+            "args": ["T_ocean_K", "freezing_temperature"]
+          }
+        },
+        {
+          "_comment": "ocean::PIK::mass_flux: mass_flux = Q/L (the C++ divides by L*ice_density and multiplies by ice_density, net Q/L); positive = melting.",
+          "lhs": "shelf_base_mass_flux",
+          "rhs": {
+            "op": "shelf_base_mass_flux",
+            "args": ["ocean_heat_flux"]
+          }
+        },
+        {
+          "_comment": "pism::average_water_column_pressure: ice_bottom = max(bed, z_s - rho_i/rho_w*H) (the floatation level for floating ice, the bed for grounded ice).",
+          "lhs": "ice_bottom",
+          "rhs": {
+            "op": "ice_bottom_elevation",
+            "args": ["H_m", "bed_m", "z_s_m"]
+          }
+        },
+        {
+          "_comment": "pism::average_water_column_pressure: h_w = max(z_s - ice_bottom, 0).",
+          "lhs": "water_column_height",
+          "rhs": {
+            "op": "water_column_height",
+            "args": ["z_s_m", "ice_bottom"]
+          }
+        },
+        {
+          "_comment": "pism::average_water_column_pressure: P = 0.5*rho_w*g*h_w^2/H for H > 0, else 0 (the depth-averaged form, NOT rho_w*g*h_w).",
+          "lhs": "average_water_column_pressure",
+          "rhs": {
+            "op": "average_water_column_pressure",
+            "args": ["H_m", "water_column_height"]
+          }
+        }
+      ],
+      "tests": [
+    {
+      "id": "tshelf_H_0",
+      "description": "PIK ocean pressure melting point at ice thickness H=0 m: T_shelf = T0 - beta_CC*rho_i*g*H = 273.14999999999998 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 273.15, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_100",
+      "description": "PIK ocean pressure melting point at ice thickness H=100 m: T_shelf = T0 - beta_CC*rho_i*g*H = 273.07947590999999 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":100.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 273.07947591, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_200",
+      "description": "PIK ocean pressure melting point at ice thickness H=200 m: T_shelf = T0 - beta_CC*rho_i*g*H = 273.00895181999999 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":200.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 273.00895182, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_300",
+      "description": "PIK ocean pressure melting point at ice thickness H=300 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.93842773 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":300.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.93842773, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_400",
+      "description": "PIK ocean pressure melting point at ice thickness H=400 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.86790363999995 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":400.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.86790363999995, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_500",
+      "description": "PIK ocean pressure melting point at ice thickness H=500 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.79737954999996 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":500.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.79737954999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_600",
+      "description": "PIK ocean pressure melting point at ice thickness H=600 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.72685545999997 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":600.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.72685545999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_700",
+      "description": "PIK ocean pressure melting point at ice thickness H=700 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.65633136999998 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":700.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.65633137, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_800",
+      "description": "PIK ocean pressure melting point at ice thickness H=800 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.58580727999998 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":800.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.58580728, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_900",
+      "description": "PIK ocean pressure melting point at ice thickness H=900 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.51528318999999 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":900.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.51528319, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1000",
+      "description": "PIK ocean pressure melting point at ice thickness H=1000 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.4447591 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1000.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.4447591, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1100",
+      "description": "PIK ocean pressure melting point at ice thickness H=1100 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.37423500999995 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1100.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.37423500999995, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1200",
+      "description": "PIK ocean pressure melting point at ice thickness H=1200 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.30371091999996 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1200.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.30371091999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1300",
+      "description": "PIK ocean pressure melting point at ice thickness H=1300 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.23318682999997 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1300.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.23318682999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1400",
+      "description": "PIK ocean pressure melting point at ice thickness H=1400 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.16266273999997 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1400.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.16266274, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1500",
+      "description": "PIK ocean pressure melting point at ice thickness H=1500 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.09213864999998 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1500.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.09213865, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1600",
+      "description": "PIK ocean pressure melting point at ice thickness H=1600 m: T_shelf = T0 - beta_CC*rho_i*g*H = 272.02161455999999 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1600.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 272.02161456, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1700",
+      "description": "PIK ocean pressure melting point at ice thickness H=1700 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.95109047 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1700.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.95109047, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1800",
+      "description": "PIK ocean pressure melting point at ice thickness H=1800 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.88056638 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1800.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.88056638, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_1900",
+      "description": "PIK ocean pressure melting point at ice thickness H=1900 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.81004228999996 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1900.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.81004228999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2000",
+      "description": "PIK ocean pressure melting point at ice thickness H=2000 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.73951819999996 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2000.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.73951819999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2100",
+      "description": "PIK ocean pressure melting point at ice thickness H=2100 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.66899410999997 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2100.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.66899410999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2200",
+      "description": "PIK ocean pressure melting point at ice thickness H=2200 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.59847001999998 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2200.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.59847002, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2300",
+      "description": "PIK ocean pressure melting point at ice thickness H=2300 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.52794592999999 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2300.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.52794593, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2400",
+      "description": "PIK ocean pressure melting point at ice thickness H=2400 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.45742183999999 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2400.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.45742184, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2500",
+      "description": "PIK ocean pressure melting point at ice thickness H=2500 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.38689775 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2500.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.38689775, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2600",
+      "description": "PIK ocean pressure melting point at ice thickness H=2600 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.31637365999995 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2600.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.31637365999995, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2700",
+      "description": "PIK ocean pressure melting point at ice thickness H=2700 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.24584956999996 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2700.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.24584956999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2800",
+      "description": "PIK ocean pressure melting point at ice thickness H=2800 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.17532547999997 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2800.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.17532547999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_2900",
+      "description": "PIK ocean pressure melting point at ice thickness H=2900 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.10480138999998 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2900.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.10480139, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tshelf_H_3000",
+      "description": "PIK ocean pressure melting point at ice thickness H=3000 m: T_shelf = T0 - beta_CC*rho_i*g*H = 271.03427729999999 K, decreasing with depth (ocean::PIK::melting_point_temperature, identical in ocean::Constant) (stage1/dumps/surface_ocean/shelf_base_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":3000.0},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.0342773, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_0",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=0 m: z_b = -(rho_i/rho_w)*H = -0 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 271.24889999999999 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 0.41077409959999328 W m^-2; mass_flux = Q/L = 1.2298625736526744e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 271.2489, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 0.4107740995999933, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.2298625736526744e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_100",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=100 m: z_b = -(rho_i/rho_w)*H = -88.521400778210108 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 271.18126964980542 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 0.5489182876000428 W m^-2; mass_flux = Q/L = 1.6434679269462359e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":100.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -88.52140077821011, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 271.1812696498054, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 0.5489182876000428, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.6434679269462359e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_200",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=200 m: z_b = -(rho_i/rho_w)*H = -177.04280155642022 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 271.1136392996109 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 0.68706247559997613 W m^-2; mass_flux = Q/L = 2.0570732802394497e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":200.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -177.04280155642022, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 271.1136392996109, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 0.6870624755999761, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 2.0570732802394497e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_300",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=300 m: z_b = -(rho_i/rho_w)*H = -265.56420233463035 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 271.04600894941632 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 0.82520666360002559 W m^-2; mass_flux = Q/L = 2.470678633533011e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":300.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -265.56420233463035, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 271.0460089494163, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 0.8252066636000256, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 2.470678633533011e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_400",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=400 m: z_b = -(rho_i/rho_w)*H = -354.08560311284043 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.97837859922174 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 0.96335085160007505 W m^-2; mass_flux = Q/L = 2.8842839868265718e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":400.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -354.08560311284043, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.97837859922174, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 0.963350851600075, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 2.884283986826572e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_500",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=500 m: z_b = -(rho_i/rho_w)*H = -442.60700389105057 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.91074824902722 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 1.1014950396000085 W m^-2; mass_flux = Q/L = 3.2978893401197858e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":500.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -442.60700389105057, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.9107482490272, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 1.1014950396000085, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 3.297889340119786e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_600",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=600 m: z_b = -(rho_i/rho_w)*H = -531.1284046692607 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.84311789883265 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 1.2396392276000578 W m^-2; mass_flux = Q/L = 3.7114946934133467e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":600.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -531.1284046692607, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.84311789883265, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 1.2396392276000578, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 3.7114946934133467e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_700",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=700 m: z_b = -(rho_i/rho_w)*H = -619.64980544747084 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.77548754863813 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 1.3777834155999913 W m^-2; mass_flux = Q/L = 4.1251000467065611e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":700.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -619.6498054474708, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.7754875486381, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 1.3777834155999913, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 4.125100046706561e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_800",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=800 m: z_b = -(rho_i/rho_w)*H = -708.17120622568086 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.70785719844355 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 1.5159276036000406 W m^-2; mass_flux = Q/L = 4.5387054000001215e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":800.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -708.1712062256809, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.70785719844355, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 1.5159276036000406, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 4.5387054000001215e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_900",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=900 m: z_b = -(rho_i/rho_w)*H = -796.692607003891 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.64022684824903 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 1.6540717915999741 W m^-2; mass_flux = Q/L = 4.9523107532933355e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":900.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -796.692607003891, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.64022684824903, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 1.654071791599974, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 4.9523107532933355e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1000",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1000 m: z_b = -(rho_i/rho_w)*H = -885.21400778210113 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.57259649805445 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 1.7922159796000234 W m^-2; mass_flux = Q/L = 5.3659161065868968e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1000.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -885.2140077821011, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.57259649805445, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 1.7922159796000234, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 5.365916106586897e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1100",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1100 m: z_b = -(rho_i/rho_w)*H = -973.73540856031127 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.50496614785988 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 1.930360167600073 W m^-2; mass_flux = Q/L = 5.7795214598804581e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1100.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -973.7354085603113, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.5049661478599, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 1.930360167600073, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 5.779521459880458e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1200",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1200 m: z_b = -(rho_i/rho_w)*H = -1062.2568093385214 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.43733579766536 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 2.0685043556000062 W m^-2; mass_flux = Q/L = 6.1931268131736712e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1200.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1062.2568093385214, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.43733579766536, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 2.0685043556000062, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 6.193126813173671e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1300",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1300 m: z_b = -(rho_i/rho_w)*H = -1150.7782101167315 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.36970544747078 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 2.2066485436000556 W m^-2; mass_flux = Q/L = 6.6067321664672325e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1300.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1150.7782101167315, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.3697054474708, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 2.2066485436000556, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 6.6067321664672325e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1400",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1400 m: z_b = -(rho_i/rho_w)*H = -1239.2996108949417 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.30207509727626 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 2.344792731599989 W m^-2; mass_flux = Q/L = 7.0203375197604465e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1400.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1239.2996108949417, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.30207509727626, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 2.344792731599989, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 7.0203375197604465e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1500",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1500 m: z_b = -(rho_i/rho_w)*H = -1327.8210116731516 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.23444474708168 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 2.4829369196000388 W m^-2; mass_flux = Q/L = 7.4339428730540086e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1500.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1327.8210116731516, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.2344447470817, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 2.482936919600039, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 7.433942873054009e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1600",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1600 m: z_b = -(rho_i/rho_w)*H = -1416.3424124513617 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.16681439688716 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 2.6210811075999718 W m^-2; mass_flux = Q/L = 7.8475482263472209e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1600.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1416.3424124513617, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.16681439688716, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 2.621081107599972, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 7.847548226347221e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1700",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1700 m: z_b = -(rho_i/rho_w)*H = -1504.8638132295719 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.09918404669259 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 2.7592252956000216 W m^-2; mass_flux = Q/L = 8.261153579640783e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1700.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1504.8638132295719, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.0991840466926, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 2.7592252956000216, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 8.261153579640783e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1800",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1800 m: z_b = -(rho_i/rho_w)*H = -1593.385214007782 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 270.03155369649801 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 2.897369483600071 W m^-2; mass_flux = Q/L = 8.6747589329343434e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1800.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1593.385214007782, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 270.031553696498, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 2.897369483600071, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 8.674758932934343e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_1900",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=1900 m: z_b = -(rho_i/rho_w)*H = -1681.9066147859921 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.96392334630349 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 3.0355136716000044 W m^-2; mass_flux = Q/L = 9.0883642862275583e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1900.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1681.9066147859921, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.9639233463035, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 3.0355136716000044, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 9.088364286227558e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2000",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2000 m: z_b = -(rho_i/rho_w)*H = -1770.4280155642023 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.89629299610891 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 3.1736578596000538 W m^-2; mass_flux = Q/L = 9.5019696395211187e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2000.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1770.4280155642023, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.8962929961089, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 3.1736578596000538, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 9.501969639521119e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2100",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2100 m: z_b = -(rho_i/rho_w)*H = -1858.9494163424124 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.82866264591439 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 3.3118020475999872 W m^-2; mass_flux = Q/L = 9.9155749928143336e-06 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2100.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1858.9494163424124, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.8286626459144, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 3.311802047599987, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 9.915574992814334e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2200",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2200 m: z_b = -(rho_i/rho_w)*H = -1947.4708171206225 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.76103229571982 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 3.4499462356000365 W m^-2; mass_flux = Q/L = 1.0329180346107894e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2200.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -1947.4708171206225, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.7610322957198, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 3.4499462356000365, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.0329180346107894e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2300",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2300 m: z_b = -(rho_i/rho_w)*H = -2035.9922178988327 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.6934019455253 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 3.58809042359997 W m^-2; mass_flux = Q/L = 1.0742785699401107e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2300.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2035.9922178988327, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.6934019455253, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 3.58809042359997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.0742785699401107e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2400",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2400 m: z_b = -(rho_i/rho_w)*H = -2124.5136186770428 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.62577159533072 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 3.7262346116000193 W m^-2; mass_flux = Q/L = 1.1156391052694669e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2400.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2124.513618677043, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.6257715953307, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 3.7262346116000193, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.115639105269467e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2500",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2500 m: z_b = -(rho_i/rho_w)*H = -2213.035019455253 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.55814124513614 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 3.8643787996000687 W m^-2; mass_flux = Q/L = 1.156999640598823e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2500.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2213.035019455253, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.55814124513614, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 3.8643787996000687, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.156999640598823e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2600",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2600 m: z_b = -(rho_i/rho_w)*H = -2301.5564202334631 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.49051089494162 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 4.0025229876000026 W m^-2; mass_flux = Q/L = 1.1983601759281445e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2600.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2301.556420233463, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.4905108949416, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 4.002522987600003, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.1983601759281445e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2700",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2700 m: z_b = -(rho_i/rho_w)*H = -2390.0778210116732 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.42288054474704 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 4.1406671756000515 W m^-2; mass_flux = Q/L = 1.2397207112575005e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2700.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2390.077821011673, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.42288054474704, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 4.1406671756000515, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.2397207112575005e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2800",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2800 m: z_b = -(rho_i/rho_w)*H = -2478.5992217898834 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.35525019455253 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 4.2788113635999849 W m^-2; mass_flux = Q/L = 1.2810812465868218e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2800.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2478.5992217898834, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.3552501945525, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 4.278811363599985, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.2810812465868218e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_2900",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=2900 m: z_b = -(rho_i/rho_w)*H = -2567.1206225680935 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.28761984435795 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 4.4169555516000347 W m^-2; mass_flux = Q/L = 1.322441781916178e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2900.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2567.1206225680935, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.28761984435795, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 4.416955551600035, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.322441781916178e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "mass_flux_H_3000",
+      "description": "PIK ocean Beckmann-Goosse shelf-base mass-flux chain at ice thickness H=3000 m: z_b = -(rho_i/rho_w)*H = -2655.6420233463032 m; T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) = 269.21998949416343 K; Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f) = 4.5550997395999682 W m^-2; mass_flux = Q/L = 1.3638023172454995e-05 kg m^-2 s^-1, positive = melting (ocean::PIK::mass_flux; stage1/dumps/surface_ocean/beckmann_goosse_mass_flux.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":3000.0},
+      "assertions": [
+        { "variable": "shelf_base_elevation", "time": 0.0, "expected": -2655.642023346303, "tolerance": { "rel": 1e-12 } },
+        { "variable": "freezing_temperature", "time": 0.0, "expected": 269.2199894941634, "tolerance": { "rel": 1e-12 } },
+        { "variable": "ocean_heat_flux", "time": 0.0, "expected": 4.555099739599968, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.3638023172454995e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_0_bed_0",
+      "description": "Average water column pressure at H=0 m, bed=0 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = 0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0,"bed_m":0.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_0_bed_-500",
+      "description": "Average water column pressure at H=0 m, bed=-500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0,"bed_m":-500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_0_bed_-1500",
+      "description": "Average water column pressure at H=0 m, bed=-1500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0,"bed_m":-1500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_0_bed_-3000",
+      "description": "Average water column pressure at H=0 m, bed=-3000 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0,"bed_m":-3000.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_500_bed_0",
+      "description": "Average water column pressure at H=500 m, bed=0 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = 0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":500.0,"bed_m":0.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_500_bed_-500",
+      "description": "Average water column pressure at H=500 m, bed=-500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -442.60700389105057 m; h_w = max(z_s - ice_bottom, 0) = 442.60700389105057 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 1975598.4922178988 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":500.0,"bed_m":-500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -442.60700389105057, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 442.60700389105057, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 1975598.4922178988, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_500_bed_-1500",
+      "description": "Average water column pressure at H=500 m, bed=-1500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -442.60700389105057 m; h_w = max(z_s - ice_bottom, 0) = 442.60700389105057 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 1975598.4922178988 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":500.0,"bed_m":-1500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -442.60700389105057, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 442.60700389105057, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 1975598.4922178988, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_500_bed_-3000",
+      "description": "Average water column pressure at H=500 m, bed=-3000 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -442.60700389105057 m; h_w = max(z_s - ice_bottom, 0) = 442.60700389105057 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 1975598.4922178988 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":500.0,"bed_m":-3000.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -442.60700389105057, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 442.60700389105057, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 1975598.4922178988, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_1000_bed_0",
+      "description": "Average water column pressure at H=1000 m, bed=0 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = 0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1000.0,"bed_m":0.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_1000_bed_-500",
+      "description": "Average water column pressure at H=1000 m, bed=-500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -500 m; h_w = max(z_s - ice_bottom, 0) = 500 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 1260585 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1000.0,"bed_m":-500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 1260585.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_1000_bed_-1500",
+      "description": "Average water column pressure at H=1000 m, bed=-1500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -885.21400778210113 m; h_w = max(z_s - ice_bottom, 0) = 885.21400778210113 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 3951196.9844357977 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1000.0,"bed_m":-1500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -885.2140077821011, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 885.2140077821011, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 3951196.9844357977, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_1000_bed_-3000",
+      "description": "Average water column pressure at H=1000 m, bed=-3000 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -885.21400778210113 m; h_w = max(z_s - ice_bottom, 0) = 885.21400778210113 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 3951196.9844357977 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":1000.0,"bed_m":-3000.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -885.2140077821011, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 885.2140077821011, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 3951196.9844357977, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_2000_bed_0",
+      "description": "Average water column pressure at H=2000 m, bed=0 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = 0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2000.0,"bed_m":0.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_2000_bed_-500",
+      "description": "Average water column pressure at H=2000 m, bed=-500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -500 m; h_w = max(z_s - ice_bottom, 0) = 500 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 630292.5 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2000.0,"bed_m":-500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 630292.5, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_2000_bed_-1500",
+      "description": "Average water column pressure at H=2000 m, bed=-1500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -1500 m; h_w = max(z_s - ice_bottom, 0) = 1500 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 5672632.5 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2000.0,"bed_m":-1500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -1500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 1500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 5672632.5, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_2000_bed_-3000",
+      "description": "Average water column pressure at H=2000 m, bed=-3000 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -1770.4280155642023 m; h_w = max(z_s - ice_bottom, 0) = 1770.4280155642023 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 7902393.9688715953 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2000.0,"bed_m":-3000.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -1770.4280155642023, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 1770.4280155642023, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 7902393.968871595, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_3000_bed_0",
+      "description": "Average water column pressure at H=3000 m, bed=0 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = 0 m; h_w = max(z_s - ice_bottom, 0) = 0 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 0 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":3000.0,"bed_m":0.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_3000_bed_-500",
+      "description": "Average water column pressure at H=3000 m, bed=-500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -500 m; h_w = max(z_s - ice_bottom, 0) = 500 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 420195 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":3000.0,"bed_m":-500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 420195.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_3000_bed_-1500",
+      "description": "Average water column pressure at H=3000 m, bed=-1500 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -1500 m; h_w = max(z_s - ice_bottom, 0) = 1500 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 3781755 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":3000.0,"bed_m":-1500.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -1500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 1500.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 3781755.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "water_column_pressure_H_3000_bed_-3000",
+      "description": "Average water column pressure at H=3000 m, bed=-3000 m, sea level 0: ice_bottom = max(bed, z_s - rho_i/rho_w*H) = -2655.6420233463032 m; h_w = max(z_s - ice_bottom, 0) = 2655.6420233463032 m; P = 0.5*rho_w*g*h_w^2/H (0 for H <= 0) = 11853590.95330739 Pa (pism::average_water_column_pressure; stage1/dumps/surface_ocean/water_column_pressure.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":3000.0,"bed_m":-3000.0},
+      "assertions": [
+        { "variable": "ice_bottom", "time": 0.0, "expected": -2655.642023346303, "tolerance": { "rel": 1e-12 } },
+        { "variable": "water_column_height", "time": 0.0, "expected": 2655.642023346303, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 11853590.95330739, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "map_dome_cell_15_15",
+      "description": "PIK ocean map at the dome cell (i,j)=(15,15) of the test-F run (H=2999.9999752362119 m, bed=-1509.4947867712904 m, sea level 0): shelf_base_temperature, shelf_base_mass_flux and average_water_column_pressure equal the dumped map columns (and the T_shelf_analytic / mf_analytic / P_analytic reference columns) (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2999.999975236212,"bed_m":-1509.4947867712904},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.0342773174644, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.3638023070030661e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 3829782.4986988152, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "map_ice_free_cell_0_0",
+      "description": "PIK ocean map at the ice-free cell (i,j)=(0,0) of the test-F run (H=0 m, bed=-1500.0003475867986 m, sea level 0): shelf_base_temperature = T0, shelf_base_mass_flux = the H=0 value Q/L (the C++ computes it everywhere, ice or not), average_water_column_pressure = 0 (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0,"bed_m":-1500.0003475867986},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 273.15, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.2298625736526746e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    }
+      ]
+    },
+    "OceanConstant": {
+      "expression_template_imports": [
+        {
+          "ref": "./surface_forcing_templates.esm"
+        }
+      ],
+      "variables": {
+        "H_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2999.9999752362119,
+          "description": "ice thickness (geometry.ice_thickness); the dome cell value"
+        },
+        "bed_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": -1509.4947867712904,
+          "description": "bed elevation (geometry.bed_elevation); the dome cell value"
+        },
+        "z_s_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "sea level elevation (geometry.sea_level_elevation)"
+        },
+        "melt_rate_m_per_s": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1.6450966622180257e-09,
+          "description": "constant-ocean melt rate ocean.constant.melt_rate = 0.051914193590840291 m/yr converted to m/s"
+        },
+        "T0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_CC": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "rho_i": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density (constants.ice.density)"
+        },
+        "rho_w": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 1028.0,
+          "description": "sea water density (constants.sea_water.density)"
+        },
+        "g": {
+          "type": "parameter",
+          "units": "m/s^2",
+          "default": 9.81,
+          "description": "standard gravity (constants.standard_gravity)"
+        },
+        "shelf_base_temperature": {
+          "type": "unknown",
+          "units": "K",
+          "description": "shelf base temperature = the same pressure melting point as the PIK ocean (ocean::Constant::update_impl calls melting_point_temperature)"
+        },
+        "shelf_base_mass_flux": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "shelf base mass flux = melt_rate*rho_i, uniform over the domain (ocean::Constant::update_impl)"
+        },
+        "ice_bottom": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ice bottom elevation max(bed, z_s - rho_i/rho_w*H) (pism::average_water_column_pressure)"
+        },
+        "water_column_height": {
+          "type": "unknown",
+          "units": "m",
+          "description": "water column height max(z_s - ice_bottom, 0) (pism::average_water_column_pressure)"
+        },
+        "average_water_column_pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "depth-averaged water column pressure 0.5*rho_w*g*h_w^2/H (identical to the PIK ocean; pism::average_water_column_pressure)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "ocean::Constant::update_impl: shelf_base_temperature = the linear pressure melting point (identical to ocean::PIK).",
+          "lhs": "shelf_base_temperature",
+          "rhs": {
+            "op": "shelf_base_temperature",
+            "args": ["H_m"]
+          }
+        },
+        {
+          "_comment": "ocean::Constant::update_impl: shelf_base_mass_flux = melt_rate*rho_i, uniform (0.051914 m/yr ice-equivalent in the reference run).",
+          "lhs": "shelf_base_mass_flux",
+          "rhs": {
+            "op": "constant_ocean_mass_flux",
+            "args": ["melt_rate_m_per_s"]
+          }
+        },
+        {
+          "_comment": "pism::average_water_column_pressure: ice_bottom = max(bed, z_s - rho_i/rho_w*H).",
+          "lhs": "ice_bottom",
+          "rhs": {
+            "op": "ice_bottom_elevation",
+            "args": ["H_m", "bed_m", "z_s_m"]
+          }
+        },
+        {
+          "_comment": "pism::average_water_column_pressure: h_w = max(z_s - ice_bottom, 0).",
+          "lhs": "water_column_height",
+          "rhs": {
+            "op": "water_column_height",
+            "args": ["z_s_m", "ice_bottom"]
+          }
+        },
+        {
+          "_comment": "pism::average_water_column_pressure: P = 0.5*rho_w*g*h_w^2/H (identical to the PIK ocean).",
+          "lhs": "average_water_column_pressure",
+          "rhs": {
+            "op": "average_water_column_pressure",
+            "args": ["H_m", "water_column_height"]
+          }
+        }
+      ],
+      "tests": [
+    {
+      "id": "constant_ocean_uniform_mass_flux_dome",
+      "description": "Constant ocean: shelf_base_mass_flux = melt_rate*rho_i = 0.051914193590840291 m/yr (converted to m/s) * 910 kg m^-3 = 1.4970379626184034e-06 kg m^-2 s^-1, uniform over the domain -- asserted at the dome cell (ocean::Constant::update_impl; stage1/dumps/surface_ocean/columns.csv shelfbmassflux_const).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2999.999975236212,"bed_m":-1509.4947867712904},
+      "assertions": [
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "constant_ocean_uniform_mass_flux_ice_free",
+      "description": "Constant ocean: the uniform shelf_base_mass_flux holds in ice-free cells too (H=0, the (0,0) cell) (stage1/dumps/surface_ocean/columns.csv shelfbmassflux_const).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0,"bed_m":-1500.0003475867986},
+      "assertions": [
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "constant_ocean_dome_cell_15_15",
+      "description": "Constant ocean map at the dome cell (i,j)=(15,15): shelf_base_temperature and average_water_column_pressure are identical to the PIK ocean (both call the same melting_point_temperature and compute_average_water_column_pressure helpers); asserted against the dump's shelfbtemp_const and awcp_const columns (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":2999.999975236212,"bed_m":-1509.4947867712904},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.0342773174644, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 3829782.4986988152, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "constant_ocean_ice_free_cell_0_0",
+      "description": "Constant ocean map at the ice-free cell (i,j)=(0,0): shelf_base_temperature = T0 and average_water_column_pressure = 0 (H=0) (stage1/dumps/surface_ocean/columns.csv shelfbtemp_const / awcp_const).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"H_m":0.0,"bed_m":-1500.0003475867986},
+      "assertions": [
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 273.15, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    }
+      ]
+    }
+  }
+}

@@ -1,0 +1,1421 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "surface_forcing",
+    "description": "PISM atmosphere/surface forcing component (stage 2 of the eqice project): the PIK atmosphere (atmosphere::PIK with the default 'martin' parameterization -- the Martin et al. (2011) eq. (1) mean-annual air temperature T_ma = 273.15 + 30 - 0.0075*usurf - 0.68775*lat*(-1), no seasonal variation T_ms = T_ma, and the time-independent precipitation field, prescribed by the Stage-1 driver as P(r) = (200 + 100 cos(pi r/Lx)) kg m^-2 yr^-1 since the real model reads it from a file), the PIK surface (surface::PIK: the SMB held constant -- the driver prescribes it as the atmosphere precipitation minus a deterministic Gaussian ablation blob -- partitioned with dummy_accumulation/dummy_melt/dummy_runoff (accumulation = max(smb,0), melt = runoff = max(-smb,0), so mass_flux = accumulation - runoff always) and the Martin 2011 surface temperature, field-for-field equal to the atmosphere air_temperature), and the coupled per-cell SurfaceOceanCoupler subassembly that wires the atmosphere + ocean + surface forcing maps for one cell (the Stage-2 coupling of the leaf components; the same equations as the leaf models, all through the shared template library). The yearly-cycle temperature time series is flat for the martin parameterization (T_ms = T_ma): the general YearlyCycle cosine formula T(t) = T_ma + (T_ms - T_ma) cos(2 pi (year_frac - summerday_frac)) is implemented and tested in its flat limit. All shared math is imported by reference from ./surface_forcing_templates.esm; the ocean side of the coupled model is in ./ocean_coupling.esm. Tests assert the instantaneous boundary outputs dumped by the instrumented PISM v2.3.2 run (stage1/dumps/surface_ocean/). Deferred: the Uniform/Given atmosphere models, the huybrechts_dewolde / era_interim / martin_huybrechts_dewolde parameterizations, the Anomaly / Delta_T / Delta_P / elevation_change / Frac_P precipitation modifiers, the PDD surface model (I), DEBM/ISMIP6/EISMINT/Simple/Given surfaces, ForceThickness, and sea-level coupling."
+  },
+  "models": {
+    "AtmospherePIK": {
+      "expression_template_imports": [
+        {
+          "ref": "./surface_forcing_templates.esm"
+        }
+      ],
+      "variables": {
+        "usurf_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1490.5051884649215,
+          "description": "ice surface elevation (geometry.ice_surface_elevation); the dome cell (15,15) value"
+        },
+        "lat_deg": {
+          "type": "parameter",
+          "units": "degrees",
+          "default": -70.0,
+          "description": "latitude in degrees north (geometry.latitude); the dome cell value"
+        },
+        "r_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "radius from the dome center max(|x|, |y|)-style radial distance (grid::radius); the prescribed precipitation field is radial"
+        },
+        "Lx_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 900000.0,
+          "description": "domain half-width (grid.Lx = 900 km in the test-F run)"
+        },
+        "precip_scale": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 3.1688764640818492e-06,
+          "description": "100 kg m^-2 yr^-1 converted to kg m^-2 s^-1 with 1 year = 3.15569259747e7 s (the UDUNITS tropical year); the amplitude of the driver's prescribed precipitation field"
+        },
+        "year_frac": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "fraction of the year at which the temperature time series is sampled (the dump samples ts = {0..1 year}/12)"
+        },
+        "summerday_frac": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5366302288352832,
+          "description": "fraction of the year of the summer peak day (atmosphere.fausto_air_temp.summer_peak_day = 196 days / 365.24219 days); irrelevant for the martin parameterization, whose cycle amplitude is zero"
+        },
+        "T_ma": {
+          "type": "unknown",
+          "units": "K",
+          "description": "mean annual near-surface air temperature T_ma = 303.15 + 0.68775*lat - 0.0075*usurf (atmosphere::PIK air_temperature(); Martin et al. 2011 eq. (1))"
+        },
+        "T_ms": {
+          "type": "unknown",
+          "units": "K",
+          "description": "mean summer near-surface air temperature; for the martin parameterization T_ms = T_ma (no seasonal variation)"
+        },
+        "precipitation": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "time-independent precipitation rate (atmosphere::PIK precipitation(); held constant in time; the driver prescribes it)"
+        },
+        "T_cycle": {
+          "type": "unknown",
+          "units": "K",
+          "description": "yearly-cycle near-surface air temperature at the sampled year_frac (atmosphere::YearlyCycle::temp_time_series): T_ma + (T_ms - T_ma) cos(2 pi (year_frac - summerday_frac)); flat for martin"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "atmosphere::PIK::martin2011_mean_annual: T_ma = 273.15 + 30 - 0.0075*usurf - 0.68775*lat*(-1) (Martin et al. 2011 eq. (1); the dump's air_temp_atm and T_ma_analytic).",
+          "lhs": "T_ma",
+          "rhs": {
+            "op": "martin_mean_annual_temperature",
+            "args": ["usurf_m", "lat_deg"]
+          }
+        },
+        {
+          "_comment": "atmosphere::PIK::martin2011: T_ms = T_ma (no seasonal variation).",
+          "lhs": "T_ms",
+          "rhs": "T_ma"
+        },
+        {
+          "_comment": "atmosphere::PIK precipitation: time-independent field, prescribed by the Stage-1 driver as P(r) = 100*(2 + cos(pi r/Lx)) kg m^-2 yr^-1 (converted to kg m^-2 s^-1); in real runs the model reads it from a file (atmosphere.pik.file).",
+          "lhs": "precipitation",
+          "rhs": {
+            "op": "prescribed_precipitation",
+            "args": ["r_m", "Lx_m"]
+          }
+        },
+        {
+          "_comment": "atmosphere::YearlyCycle::temp_time_series_impl: T(t) = T_ma + (T_ms - T_ma) cos(2 pi (year_frac - summerday_frac)); flat for martin because T_ms = T_ma.",
+          "lhs": "T_cycle",
+          "rhs": {
+            "op": "yearly_cycle_temperature",
+            "args": ["T_ma", "T_ms", "year_frac", "summerday_frac"]
+          }
+        }
+      ],
+      "tests": [
+    {
+      "id": "tma_lat_m60_usurf_0",
+      "description": "Martin 2011 mean-annual air temperature at lat=-60 deg, usurf=0 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":0.0,"lat_deg":-60.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 261.885, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 261.885, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m60_usurf_500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-60 deg, usurf=500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":500.0,"lat_deg":-60.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 258.135, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 258.135, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m60_usurf_1000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-60 deg, usurf=1000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1000.0,"lat_deg":-60.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 254.385, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 254.385, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m60_usurf_1500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-60 deg, usurf=1500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1500.0,"lat_deg":-60.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 250.635, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 250.635, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m60_usurf_2000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-60 deg, usurf=2000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2000.0,"lat_deg":-60.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 246.885, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 246.885, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m60_usurf_2500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-60 deg, usurf=2500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2500.0,"lat_deg":-60.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 243.135, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 243.135, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m60_usurf_3000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-60 deg, usurf=3000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":3000.0,"lat_deg":-60.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 239.385, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 239.385, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m65_usurf_0",
+      "description": "Martin 2011 mean-annual air temperature at lat=-65 deg, usurf=0 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":0.0,"lat_deg":-65.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 258.44624999999996, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 258.44624999999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m65_usurf_500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-65 deg, usurf=500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":500.0,"lat_deg":-65.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 254.69624999999996, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 254.69624999999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m65_usurf_1000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-65 deg, usurf=1000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1000.0,"lat_deg":-65.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 250.94624999999996, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 250.94624999999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m65_usurf_1500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-65 deg, usurf=1500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1500.0,"lat_deg":-65.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 247.19624999999996, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 247.19624999999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m65_usurf_2000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-65 deg, usurf=2000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2000.0,"lat_deg":-65.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 243.44624999999996, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 243.44624999999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m65_usurf_2500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-65 deg, usurf=2500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2500.0,"lat_deg":-65.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 239.69624999999996, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 239.69624999999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m65_usurf_3000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-65 deg, usurf=3000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":3000.0,"lat_deg":-65.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 235.94624999999996, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 235.94624999999996, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m70_usurf_0",
+      "description": "Martin 2011 mean-annual air temperature at lat=-70 deg, usurf=0 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":0.0,"lat_deg":-70.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 255.0075, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 255.0075, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m70_usurf_500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-70 deg, usurf=500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":500.0,"lat_deg":-70.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 251.2575, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 251.2575, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m70_usurf_1000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-70 deg, usurf=1000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1000.0,"lat_deg":-70.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 247.5075, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 247.5075, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m70_usurf_1500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-70 deg, usurf=1500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1500.0,"lat_deg":-70.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 243.7575, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 243.7575, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m70_usurf_2000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-70 deg, usurf=2000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2000.0,"lat_deg":-70.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 240.0075, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 240.0075, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m70_usurf_2500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-70 deg, usurf=2500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2500.0,"lat_deg":-70.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 236.2575, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 236.2575, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m70_usurf_3000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-70 deg, usurf=3000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":3000.0,"lat_deg":-70.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 232.5075, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 232.5075, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m75_usurf_0",
+      "description": "Martin 2011 mean-annual air temperature at lat=-75 deg, usurf=0 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":0.0,"lat_deg":-75.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 251.56874999999997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 251.56874999999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m75_usurf_500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-75 deg, usurf=500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":500.0,"lat_deg":-75.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 247.81874999999997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 247.81874999999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m75_usurf_1000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-75 deg, usurf=1000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1000.0,"lat_deg":-75.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 244.06874999999997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 244.06874999999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m75_usurf_1500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-75 deg, usurf=1500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1500.0,"lat_deg":-75.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 240.31874999999997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 240.31874999999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m75_usurf_2000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-75 deg, usurf=2000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2000.0,"lat_deg":-75.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 236.56874999999997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 236.56874999999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m75_usurf_2500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-75 deg, usurf=2500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2500.0,"lat_deg":-75.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 232.81874999999997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 232.81874999999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m75_usurf_3000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-75 deg, usurf=3000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":3000.0,"lat_deg":-75.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 229.06874999999997, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 229.06874999999997, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m80_usurf_0",
+      "description": "Martin 2011 mean-annual air temperature at lat=-80 deg, usurf=0 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":0.0,"lat_deg":-80.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 248.13, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 248.13, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m80_usurf_500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-80 deg, usurf=500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":500.0,"lat_deg":-80.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 244.38, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 244.38, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m80_usurf_1000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-80 deg, usurf=1000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1000.0,"lat_deg":-80.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 240.63, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 240.63, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m80_usurf_1500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-80 deg, usurf=1500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1500.0,"lat_deg":-80.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 236.88, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 236.88, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m80_usurf_2000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-80 deg, usurf=2000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2000.0,"lat_deg":-80.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 233.13, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 233.13, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m80_usurf_2500",
+      "description": "Martin 2011 mean-annual air temperature at lat=-80 deg, usurf=2500 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":2500.0,"lat_deg":-80.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 229.38, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 229.38, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "tma_lat_m80_usurf_3000",
+      "description": "Martin 2011 mean-annual air temperature at lat=-80 deg, usurf=3000 m: T_ma = 303.15 + 0.68775*lat - 0.0075*usurf, T_ms = T_ma (no seasonal cycle) (stage1/dumps/surface_ocean/atmosphere_temperature.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":3000.0,"lat_deg":-80.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 225.63, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 225.63, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_0",
+      "description": "Prescribed atmosphere::PIK precipitation at r=0 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":0.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 9.506629392245548e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_45000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=45000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":45000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 9.467615264523688e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_90000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=90000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":90000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 9.351533538663087e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_135000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=135000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":135000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 9.161242532007592e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_180000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=180000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":180000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 8.901427840680708e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_225000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=225000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":225000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 8.578486964658423e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_270000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=270000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":270000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 8.20037178008773e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_315000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=315000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":315000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 7.776392737705106e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_360000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=360000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":360000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 7.316989608639783e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_405000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=405000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":405000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 6.833474422600922e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_450000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=450000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":450000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 6.3377529281636985e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_495000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=495000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":495000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 5.8420314337264766e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_540000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=540000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":540000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 5.358516247687614e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_585000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=585000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":585000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 4.899113118622292e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_630000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=630000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":630000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 4.475134076239669e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_675000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=675000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":675000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 4.097018891668974e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_720000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=720000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":720000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 3.7740780156466897e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_765000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=765000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":765000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 3.5142633243198052e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_810000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=810000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":810000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 3.323972317664311e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_855000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=855000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":855000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 3.207890591803709e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "precip_r_900000",
+      "description": "Prescribed atmosphere::PIK precipitation at r=900000 m: P = precip_scale*(2 + cos(pi r/Lx)) with precip_scale = 100 kg m^-2 yr^-1 (converted with 1 yr = 3.15569259747e7 s), Lx = 900 km (stage1/dumps/surface_ocean/atmosphere_precipitation.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"r_m":900000.0,"Lx_m":900000.0},
+      "assertions": [
+        { "variable": "precipitation", "time": 0.0, "expected": 3.1688764640818492e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "yearly_cycle_flat_center",
+      "description": "Yearly-cycle temperature time series at the near-dome sample point (i,j)=(15,15): lat=-70 deg, usurf=1490.5051884649215 m (the dome cell); for the martin parameterization T_ms = T_ma, so T_cycle = T_ma + (T_ms - T_ma)*cos(2 pi (year_frac - summerday_frac)) is flat at every sampled year_frac (the dump samples ts = {0..1 yr}/12) and precipitation is time-independent (stage1/dumps/surface_ocean/atmosphere_temperature_timeseries.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1490.5051884649215,"lat_deg":-70.0,"r_m":1.0,"Lx_m":900000.0,"year_frac":0.0},
+      "assertions": [
+        { "variable": "T_cycle", "time": 0.0, "expected": 243.82871108651307, "tolerance": { "rel": 1e-12 } },
+        { "variable": "precipitation", "time": 0.0, "expected": 9.506629392226242e-06, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "yearly_cycle_flat_north",
+      "description": "Yearly-cycle temperature time series at the north-edge sample point (i,j)=(15,30): lat=-60.322580645161288 deg, usurf=0; flat for martin (stage1/dumps/surface_ocean/atmosphere_temperature_timeseries.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":0.0,"lat_deg":-60.32258064516129,"r_m":870967.7419354839,"Lx_m":900000.0,"year_frac":0.0},
+      "assertions": [
+        { "variable": "T_cycle", "time": 0.0, "expected": 261.6631451612903, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "yearly_cycle_flat_south",
+      "description": "Yearly-cycle temperature time series at the south-edge sample point (i,j)=(15,0): lat=-79.677419354838705 deg, usurf=0; flat for martin (stage1/dumps/surface_ocean/atmosphere_temperature_timeseries.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":0.0,"lat_deg":-79.6774193548387,"r_m":870967.7419354839,"Lx_m":900000.0,"year_frac":0.0},
+      "assertions": [
+        { "variable": "T_cycle", "time": 0.0, "expected": 248.35185483870967, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "yearly_cycle_flat_midyear",
+      "description": "Flatness at the quarter-year point: with T_ms = T_ma the cosine term vanishes for ANY year_frac and summerday_frac, so T_cycle = T_ma at year_frac = 0.25 too (the martin yearly cycle has zero amplitude; general YearlyCycle formula is T_ma + (T_ms - T_ma) cos(2 pi (year_frac - summerday_frac))).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"usurf_m":1490.5051884649215,"lat_deg":-70.0,"r_m":1.0,"Lx_m":900000.0,"year_frac":0.25},
+      "assertions": [
+        { "variable": "T_cycle", "time": 0.0, "expected": 243.82871108651307, "tolerance": { "rel": 1e-12 } }
+      ]
+    }
+      ]
+    },
+    "SurfacePIK": {
+      "expression_template_imports": [
+        {
+          "ref": "./surface_forcing_templates.esm"
+        }
+      ],
+      "variables": {
+        "smb": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 9.1343127559633896e-06,
+          "description": "surface mass balance (surface::PIK m_mass_flux; held constant from a file in real runs; the driver prescribes it as precipitation minus the ablation blob; the dome cell value)"
+        },
+        "usurf_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1490.5051884649215,
+          "description": "ice surface elevation (geometry.ice_surface_elevation); the dome cell value"
+        },
+        "lat_deg": {
+          "type": "parameter",
+          "units": "degrees",
+          "default": -70.0,
+          "description": "latitude in degrees north (geometry.latitude); the dome cell value"
+        },
+        "accumulation": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface accumulation = max(smb, 0) (SurfaceModel::dummy_accumulation)"
+        },
+        "melt": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface melt = max(-smb, 0) (SurfaceModel::dummy_melt; all melt runs off)"
+        },
+        "runoff": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface runoff = max(-smb, 0) (SurfaceModel::dummy_runoff)"
+        },
+        "mass_flux": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface mass balance output = accumulation - runoff = smb (surface::PIK mass_flux(); the dummy_* partition guarantees the identity)"
+        },
+        "temperature": {
+          "type": "unknown",
+          "units": "K",
+          "description": "ice surface temperature, Martin et al. (2011) eq. (1) -- identical to the PIK atmosphere air_temperature field-for-field (surface::PIK::update_impl)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "SurfaceModel::dummy_accumulation: accumulation = max(smb, 0).",
+          "lhs": "accumulation",
+          "rhs": {
+            "op": "smb_accumulation",
+            "args": ["smb"]
+          }
+        },
+        {
+          "_comment": "SurfaceModel::dummy_melt: melt = max(-smb, 0).",
+          "lhs": "melt",
+          "rhs": {
+            "op": "smb_melt_runoff",
+            "args": ["smb"]
+          }
+        },
+        {
+          "_comment": "SurfaceModel::dummy_runoff: runoff = max(-smb, 0).",
+          "lhs": "runoff",
+          "rhs": {
+            "op": "smb_melt_runoff",
+            "args": ["smb"]
+          }
+        },
+        {
+          "_comment": "SMB identity: mass_flux = accumulation - runoff (always equals smb under the dummy partition).",
+          "lhs": "mass_flux",
+          "rhs": {
+            "op": "surface_mass_flux_identity",
+            "args": ["accumulation", "runoff"]
+          }
+        },
+        {
+          "_comment": "surface::PIK::update_impl ice surface temperature: 273.15 + 30 - 0.0075*usurf - 0.68775*lat*(-1), the same Martin 2011 formula as the PIK atmosphere.",
+          "lhs": "temperature",
+          "rhs": {
+            "op": "martin_mean_annual_temperature",
+            "args": ["usurf_m", "lat_deg"]
+          }
+        }
+      ],
+      "tests": [
+    {
+      "id": "partition_smb_m5p0000000000000002em05",
+      "description": "surface::PIK SMB partition at smb=-5.0000000000000002e-05 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":-5e-05},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 5e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 5e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": -5e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_m3p0000000000000001em05",
+      "description": "surface::PIK SMB partition at smb=-3.0000000000000001e-05 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":-3e-05},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 3e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 3e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": -3e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_m1p0000000000000001em05",
+      "description": "surface::PIK SMB partition at smb=-1.0000000000000001e-05 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":-1e-05},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 1e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 1e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": -1e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_m1em08",
+      "description": "surface::PIK SMB partition at smb=-1e-08 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":-1e-08},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 1e-08, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 1e-08, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": -1e-08, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_0",
+      "description": "surface::PIK SMB partition at smb=0 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":0.0},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": -0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": -0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_1em08",
+      "description": "surface::PIK SMB partition at smb=1e-08 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":1e-08},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 1e-08, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": 1e-08, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_1p0000000000000001em05",
+      "description": "surface::PIK SMB partition at smb=1.0000000000000001e-05 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":1e-05},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 1e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": 1e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_3p0000000000000001em05",
+      "description": "surface::PIK SMB partition at smb=3.0000000000000001e-05 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":3e-05},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 3e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": 3e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "partition_smb_5p0000000000000002em05",
+      "description": "surface::PIK SMB partition at smb=5.0000000000000002e-05 kg m^-2 s^-1 (SurfaceModel::dummy_*): accumulation = max(smb,0), melt = runoff = max(-smb,0), and mass_flux = accumulation - runoff = smb (stage1/dumps/surface_ocean/surface_partition.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"smb":5e-05},
+      "assertions": [
+        { "variable": "accumulation", "time": 0.0, "expected": 5e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "mass_flux", "time": 0.0, "expected": 5e-05, "tolerance": { "rel": 1e-12 } }
+      ]
+    }
+      ]
+    },
+    "SurfaceOceanCoupler": {
+      "expression_template_imports": [
+        {
+          "ref": "./surface_forcing_templates.esm"
+        }
+      ],
+      "variables": {
+        "x_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "x-coordinate of the cell center (grid x(i))"
+        },
+        "y_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "y-coordinate of the cell center (grid y(j))"
+        },
+        "r_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "radial distance from the dome center (grid::radius)"
+        },
+        "lat_deg": {
+          "type": "parameter",
+          "units": "degrees",
+          "default": -70.0,
+          "description": "latitude in degrees north (geometry.latitude)"
+        },
+        "H_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2999.9999752362119,
+          "description": "ice thickness (geometry.ice_thickness)"
+        },
+        "usurf_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1490.5051884649215,
+          "description": "ice surface elevation (geometry.ice_surface_elevation)"
+        },
+        "bed_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": -1509.4947867712904,
+          "description": "bed elevation (geometry.bed_elevation)"
+        },
+        "z_s_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "sea level elevation (geometry.sea_level_elevation)"
+        },
+        "Lx_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 900000.0,
+          "description": "domain half-width (grid.Lx)"
+        },
+        "Ly_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 900000.0,
+          "description": "domain half-height (grid.Ly)"
+        },
+        "sigma_m": {
+          "type": "parameter",
+          "units": "m",
+          "default": 250000.0,
+          "description": "width of the driver's ablation blob (sigma = 250 km)"
+        },
+        "precip_scale": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 3.1688764640818492e-06,
+          "description": "100 kg m^-2 yr^-1 converted to kg m^-2 s^-1 (1 year = 3.15569259747e7 s)"
+        },
+        "abl_peak": {
+          "type": "parameter",
+          "units": "kg/m^2/s",
+          "default": 9.5066293922455477e-06,
+          "description": "peak of the driver's ablation blob: 300 kg m^-2 yr^-1 converted to kg m^-2 s^-1"
+        },
+        "melt_rate_m_per_s": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1.6450966622180257e-09,
+          "description": "constant-ocean melt rate ocean.constant.melt_rate = 0.051914193590840291 m/yr converted to m/s"
+        },
+        "T_ocean_K": {
+          "type": "parameter",
+          "units": "K",
+          "default": 271.45,
+          "description": "ocean temperature T_ocean = -1.7 deg C (hard-coded default in ConstantPIK.cc)"
+        },
+        "T0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "fresh-water melting point (constants.fresh_water.melting_point_temperature)"
+        },
+        "beta_CC": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)"
+        },
+        "rho_i": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density (constants.ice.density)"
+        },
+        "rho_w": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 1028.0,
+          "description": "sea water density (constants.sea_water.density)"
+        },
+        "g": {
+          "type": "parameter",
+          "units": "m/s^2",
+          "default": 9.81,
+          "description": "standard gravity (constants.standard_gravity)"
+        },
+        "salinity": {
+          "type": "parameter",
+          "units": "g/kg",
+          "default": 35.0,
+          "description": "ocean salinity, g/kg (hard-coded in ConstantPIK.cc)"
+        },
+        "melt_factor": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.005,
+          "description": "ocean.pik_melt_factor"
+        },
+        "c_p_ocean": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 3974.0,
+          "description": "specific heat capacity of the ocean mixed layer (hard-coded 3974 J/(K kg) in ConstantPIK.cc)"
+        },
+        "gamma_T": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0001,
+          "description": "thermal exchange velocity (hard-coded 1e-4 m/s in ConstantPIK.cc)"
+        },
+        "L": {
+          "type": "parameter",
+          "units": "J/kg",
+          "default": 334000.0,
+          "description": "latent heat of fusion of fresh water (constants.fresh_water.latent_heat_of_fusion)"
+        },
+        "T_ma": {
+          "type": "unknown",
+          "units": "K",
+          "description": "mean annual near-surface air temperature (atmosphere PIK, martin)"
+        },
+        "T_ms": {
+          "type": "unknown",
+          "units": "K",
+          "description": "mean summer near-surface air temperature (martin: equal to T_ma)"
+        },
+        "precipitation": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "atmosphere PIK precipitation (driver-prescribed, time-independent)"
+        },
+        "smb": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface mass balance = precipitation - ablation blob (the driver wiring of surface::PIK's constant SMB field)"
+        },
+        "surface_accumulation": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface accumulation = max(smb, 0)"
+        },
+        "surface_melt": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface melt = max(-smb, 0)"
+        },
+        "surface_runoff": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface runoff = max(-smb, 0)"
+        },
+        "surface_mass_flux": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "surface mass balance output = accumulation - runoff"
+        },
+        "surface_temperature": {
+          "type": "unknown",
+          "units": "K",
+          "description": "ice surface temperature (surface PIK; the Martin 2011 formula, equal to the atmosphere air temperature)"
+        },
+        "shelf_base_temperature": {
+          "type": "unknown",
+          "units": "K",
+          "description": "shelf base temperature T0 - beta_CC*rho_i*g*H (PIK and Constant oceans)"
+        },
+        "shelf_base_elevation": {
+          "type": "unknown",
+          "units": "m",
+          "description": "shelf base elevation z_b = -(rho_i/rho_w) H"
+        },
+        "freezing_temperature": {
+          "type": "unknown",
+          "units": "K",
+          "description": "ocean freezing temperature T_f = 273.15 + 0.0939 - 0.057*S + 7.64e-4*z_b (Beckmann & Goosse 2003)"
+        },
+        "ocean_heat_flux": {
+          "type": "unknown",
+          "units": "W/m^2",
+          "description": "ocean-to-ice heat flux Q = melt_factor*rho_w*c_p_ocean*gamma_T*(T_ocean - T_f)"
+        },
+        "shelf_base_mass_flux": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "shelf base mass flux = Q/L (positive = melting)"
+        },
+        "ice_bottom": {
+          "type": "unknown",
+          "units": "m",
+          "description": "ice bottom elevation max(bed, z_s - rho_i/rho_w H)"
+        },
+        "water_column_height": {
+          "type": "unknown",
+          "units": "m",
+          "description": "water column height max(z_s - ice_bottom, 0)"
+        },
+        "average_water_column_pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "depth-averaged water column pressure 0.5 rho_w g h_w^2 / H (PIK and Constant oceans)"
+        },
+        "shelfbtemp_const": {
+          "type": "unknown",
+          "units": "K",
+          "description": "Constant-ocean shelf base temperature (same pressure melting point as PIK)"
+        },
+        "shelfbmassflux_const": {
+          "type": "unknown",
+          "units": "kg/m^2/s",
+          "description": "Constant-ocean shelf base mass flux = melt_rate * rho_i (uniform over the domain)"
+        },
+        "awcp_const": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Constant-ocean average water column pressure (identical to PIK)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Coupling: atmosphere PIK T_ma (martin), passed field-for-field to the surface temperature.",
+          "lhs": "T_ma",
+          "rhs": { "op": "martin_mean_annual_temperature", "args": ["usurf_m", "lat_deg"] }
+        },
+        {
+          "_comment": "Coupling: martin T_ms = T_ma.",
+          "lhs": "T_ms",
+          "rhs": "T_ma"
+        },
+        {
+          "_comment": "Coupling: the driver fills atmosphere::PIK's precipitation field.",
+          "lhs": "precipitation",
+          "rhs": { "op": "prescribed_precipitation", "args": ["r_m", "Lx_m"] }
+        },
+        {
+          "_comment": "Coupling: the driver fills surface::PIK's SMB field as precipitation minus the ablation blob (instrument_surface_ocean.cc).",
+          "lhs": "smb",
+          "rhs": { "op": "-", "args": [
+            "precipitation",
+            { "op": "surface_ablation_blob", "args": ["x_m", "y_m", "Ly_m", "sigma_m"] }
+          ] }
+        },
+        {
+          "_comment": "Surface partition: accumulation = max(smb, 0).",
+          "lhs": "surface_accumulation",
+          "rhs": { "op": "smb_accumulation", "args": ["smb"] }
+        },
+        {
+          "_comment": "Surface partition: melt = max(-smb, 0).",
+          "lhs": "surface_melt",
+          "rhs": { "op": "smb_melt_runoff", "args": ["smb"] }
+        },
+        {
+          "_comment": "Surface partition: runoff = max(-smb, 0).",
+          "lhs": "surface_runoff",
+          "rhs": { "op": "smb_melt_runoff", "args": ["smb"] }
+        },
+        {
+          "_comment": "SMB identity: mass_flux = accumulation - runoff.",
+          "lhs": "surface_mass_flux",
+          "rhs": { "op": "surface_mass_flux_identity", "args": ["surface_accumulation", "surface_runoff"] }
+        },
+        {
+          "_comment": "Surface temperature = the atmosphere T_ma (both the Martin 2011 formula).",
+          "lhs": "surface_temperature",
+          "rhs": { "op": "martin_mean_annual_temperature", "args": ["usurf_m", "lat_deg"] }
+        },
+        {
+          "_comment": "Ocean PIK: shelf base temperature (pressure melting point).",
+          "lhs": "shelf_base_temperature",
+          "rhs": { "op": "shelf_base_temperature", "args": ["H_m"] }
+        },
+        {
+          "_comment": "Ocean PIK mass flux chain: z_b.",
+          "lhs": "shelf_base_elevation",
+          "rhs": { "op": "shelf_base_elevation", "args": ["H_m"] }
+        },
+        {
+          "_comment": "Ocean PIK mass flux chain: T_f.",
+          "lhs": "freezing_temperature",
+          "rhs": { "op": "beckmann_goosse_freezing_temperature", "args": ["shelf_base_elevation"] }
+        },
+        {
+          "_comment": "Ocean PIK mass flux chain: Q.",
+          "lhs": "ocean_heat_flux",
+          "rhs": { "op": "ocean_to_ice_heat_flux", "args": ["T_ocean_K", "freezing_temperature"] }
+        },
+        {
+          "_comment": "Ocean PIK mass flux chain: mass_flux = Q/L.",
+          "lhs": "shelf_base_mass_flux",
+          "rhs": { "op": "shelf_base_mass_flux", "args": ["ocean_heat_flux"] }
+        },
+        {
+          "_comment": "Ocean PIK water column pressure chain: ice_bottom.",
+          "lhs": "ice_bottom",
+          "rhs": { "op": "ice_bottom_elevation", "args": ["H_m", "bed_m", "z_s_m"] }
+        },
+        {
+          "_comment": "Ocean PIK water column pressure chain: h_w.",
+          "lhs": "water_column_height",
+          "rhs": { "op": "water_column_height", "args": ["z_s_m", "ice_bottom"] }
+        },
+        {
+          "_comment": "Ocean PIK water column pressure: P = 0.5 rho_w g h_w^2 / H.",
+          "lhs": "average_water_column_pressure",
+          "rhs": { "op": "average_water_column_pressure", "args": ["H_m", "water_column_height"] }
+        },
+        {
+          "_comment": "Constant ocean cross-check: shelf base temperature identical to the PIK pressure melting point.",
+          "lhs": "shelfbtemp_const",
+          "rhs": { "op": "shelf_base_temperature", "args": ["H_m"] }
+        },
+        {
+          "_comment": "Constant ocean cross-check: uniform mass flux = melt_rate * rho_i (ocean.constant.melt_rate = 0.051914 m/yr).",
+          "lhs": "shelfbmassflux_const",
+          "rhs": { "op": "constant_ocean_mass_flux", "args": ["melt_rate_m_per_s"] }
+        },
+        {
+          "_comment": "Constant ocean cross-check: average water column pressure identical to the PIK value.",
+          "lhs": "awcp_const",
+          "rhs": { "op": "average_water_column_pressure", "args": ["H_m", "water_column_height"] }
+        }
+      ],
+      "tests": [
+    {
+      "id": "map_dome_15_15",
+      "description": "Per-cell forcing map at the dome column (i,j)=(15,15) of the test-F run (r=1 m, lat=-70 deg, H=2999.9999752362119 m, surface=1490.5051884649215 m, bed=-1509.4947867712904 m, mask=2): the PIK atmosphere T_ma = T_ms (martin), the prescribed precipitation field, the SMB = precipitation - ablation blob, the PIK surface partition and temperature, the PIK ocean shelf_base_temperature / shelf_base_mass_flux / average_water_column_pressure, and the Constant ocean cross-check columns. Each output is asserted against the dump value AND the analytic reference column, which must coincide (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"x_m":0.0,"y_m":0.0,"r_m":1.0,"lat_deg":-70.0,"H_m":2999.999975236212,"usurf_m":1490.5051884649215,"bed_m":-1509.4947867712904,"z_s_m":0.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 243.82871108651307, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 243.82871108651307, "tolerance": { "rel": 1e-12 } },
+        { "variable": "precipitation", "time": 0.0, "expected": 9.506629392226242e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "smb", "time": 0.0, "expected": 9.13431275596339e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_accumulation", "time": 0.0, "expected": 9.13431275596339e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_mass_flux", "time": 0.0, "expected": 9.13431275596339e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_temperature", "time": 0.0, "expected": 243.82871108651307, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.0342773174644, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.3638023070030661e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 3829782.4986988152, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbtemp_const", "time": 0.0, "expected": 271.0342773174644, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbmassflux_const", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "awcp_const", "time": 0.0, "expected": 3829782.4986988152, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ma", "time": 0.0, "expected": 243.82871108651307, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.0342773174644, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.3638023070030661e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 3829782.4986988152, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "map_grounded_mid_15_14",
+      "description": "Per-cell forcing map at the grounded_mid column (i,j)=(15,14) of the test-F run (r=58064.516129032243 m, lat=-70.645161290322577 deg, H=2945.7933387368698 m, surface=1413.5637543937439 m, bed=-1532.2295843431259 m, mask=2): the PIK atmosphere T_ma = T_ms (martin), the prescribed precipitation field, the SMB = precipitation - ablation blob, the PIK surface partition and temperature, the PIK ocean shelf_base_temperature / shelf_base_mass_flux / average_water_column_pressure, and the Constant ocean cross-check columns. Each output is asserted against the dump value AND the analytic reference column, which must coincide (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"x_m":0.0,"y_m":-58064.51612903224,"r_m":58064.51612903224,"lat_deg":-70.64516129032258,"H_m":2945.79333873687,"usurf_m":1413.563754393744,"bed_m":-1532.229584343126,"z_s_m":0.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 243.96206216462758, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 243.96206216462758, "tolerance": { "rel": 1e-12 } },
+        { "variable": "precipitation", "time": 0.0, "expected": 9.441762304862205e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "smb", "time": 0.0, "expected": 9.288879472847445e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_accumulation", "time": 0.0, "expected": 9.288879472847445e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_mass_flux", "time": 0.0, "expected": 9.288879472847445e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_temperature", "time": 0.0, "expected": 243.96206216462758, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.0725060545752, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.3413821519629232e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 4018625.5167075023, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbtemp_const", "time": 0.0, "expected": 271.0725060545752, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbmassflux_const", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "awcp_const", "time": 0.0, "expected": 4018625.5167075023, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ma", "time": 0.0, "expected": 243.96206216462758, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.0725060545752, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.3413821519629232e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 4018625.5167075023, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "map_floating_trough_19_12",
+      "description": "Per-cell forcing map at the floating_trough column (i,j)=(19,12) of the test-F run (r=290322.58064516122 m, lat=-71.935483870967744 deg, H=2525.6801843981348 m, surface=289.91270599122566 m, bed=-2292.9803411075036 m, mask=3): the PIK atmosphere T_ma = T_ms (martin), the prescribed precipitation field, the SMB = precipitation - ablation blob, the PIK surface partition and temperature, the PIK ocean shelf_base_temperature / shelf_base_mass_flux / average_water_column_pressure, and the Constant ocean cross-check columns. Each output is asserted against the dump value AND the analytic reference column, which must coincide (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"x_m":232258.06451612897,"y_m":-174193.54838709673,"r_m":290322.5806451612,"lat_deg":-71.93548387096774,"H_m":2525.6801843981348,"usurf_m":289.91270599122566,"bed_m":-2292.9803411075036,"z_s_m":0.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 251.50202567280772, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 251.50202567280772, "tolerance": { "rel": 1e-12 } },
+        { "variable": "precipitation", "time": 0.0, "expected": 8.013974530835159e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "smb", "time": 0.0, "expected": 8.006106857709463e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_accumulation", "time": 0.0, "expected": 8.006106857709463e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_mass_flux", "time": 0.0, "expected": 8.006106857709463e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_temperature", "time": 0.0, "expected": 251.50202567280772, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.3687870336429, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.167621102339447e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 9979459.92824316, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbtemp_const", "time": 0.0, "expected": 271.3687870336429, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbmassflux_const", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "awcp_const", "time": 0.0, "expected": 9979459.92824316, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ma", "time": 0.0, "expected": 251.50202567280772, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.3687870336429, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.167621102339447e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 9979459.92824316, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "map_floating_deep_22_12",
+      "description": "Per-cell forcing map at the floating_deep column (i,j)=(22,12) of the test-F run (r=442206.18034048489 m, lat=-71.935483870967744 deg, H=2117.7445786660719 m, surface=243.08741272626125 m, bed=-2997.7238427797392 m, mask=3): the PIK atmosphere T_ma = T_ms (martin), the prescribed precipitation field, the SMB = precipitation - ablation blob, the PIK surface partition and temperature, the PIK ocean shelf_base_temperature / shelf_base_mass_flux / average_water_column_pressure, and the Constant ocean cross-check columns. Each output is asserted against the dump value AND the analytic reference column, which must coincide (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"x_m":406451.6129032257,"y_m":-174193.54838709673,"r_m":442206.1803404849,"lat_deg":-71.93548387096774,"H_m":2117.744578666072,"usurf_m":243.08741272626125,"bed_m":-2997.7238427797392,"z_s_m":0.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 251.85321537229495, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 251.85321537229495, "tolerance": { "rel": 1e-12 } },
+        { "variable": "precipitation", "time": 0.0, "expected": 6.423953361689672e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "smb", "time": 0.0, "expected": 6.422626765145201e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_accumulation", "time": 0.0, "expected": 6.422626765145201e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_mass_flux", "time": 0.0, "expected": 6.422626765145201e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_temperature", "time": 0.0, "expected": 251.85321537229495, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.6564799073714, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 9.98896752009657e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 8367625.993030644, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbtemp_const", "time": 0.0, "expected": 271.6564799073714, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbmassflux_const", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "awcp_const", "time": 0.0, "expected": 8367625.993030644, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ma", "time": 0.0, "expected": 251.85321537229495, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.6564799073714, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 9.988967520096571e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 8367625.993030644, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "map_floating_melt_14_21",
+      "description": "Per-cell forcing map at the floating_melt column (i,j)=(14,21) of the test-F run (r=353192.66304957395 m, lat=-66.129032258064512 deg, H=2371.3420670689939 m, surface=272.19685205655776 m, bed=-2686.6967368564328 m, mask=3): the PIK atmosphere T_ma = T_ms (martin), the prescribed precipitation field, the SMB = precipitation - ablation blob, the PIK surface partition and temperature, the PIK ocean shelf_base_temperature / shelf_base_mass_flux / average_water_column_pressure, and the Constant ocean cross-check columns. Each output is asserted against the dump value AND the analytic reference column, which must coincide (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"x_m":-58064.51612903224,"y_m":348387.09677419346,"r_m":353192.66304957395,"lat_deg":-66.12903225806451,"H_m":2371.342067068994,"usurf_m":272.19685205655776,"bed_m":-2686.696736856433,"z_s_m":0.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 255.62828167409194, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 255.62828167409194, "tolerance": { "rel": 1e-12 } },
+        { "variable": "precipitation", "time": 0.0, "expected": 7.388320147921263e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "smb", "time": 0.0, "expected": -2.4744129166880316e-07, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_accumulation", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_melt", "time": 0.0, "expected": 2.4744129166880316e-07, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_runoff", "time": 0.0, "expected": 2.4744129166880316e-07, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_mass_flux", "time": 0.0, "expected": -2.4744129166880316e-07, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_temperature", "time": 0.0, "expected": 255.62828167409194, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.47763258641237, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.103786030794881e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 9369639.624468757, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbtemp_const", "time": 0.0, "expected": 271.47763258641237, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbmassflux_const", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "awcp_const", "time": 0.0, "expected": 9369639.624468757, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ma", "time": 0.0, "expected": 255.62828167409194, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 271.47763258641237, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.103786030794881e-05, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 9369639.624468757, "tolerance": { "rel": 1e-12 } }
+      ]
+    },
+    {
+      "id": "map_ice_free_0_0",
+      "description": "Per-cell forcing map at the ice_free column (i,j)=(0,0) of the test-F run (r=1231734.3930346312 m, lat=-79.677419354838705 deg, H=0 m, surface=0 m, bed=-1500.0003475867986 m, mask=4): the PIK atmosphere T_ma = T_ms (martin), the prescribed precipitation field, the SMB = precipitation - ablation blob, the PIK surface partition and temperature, the PIK ocean shelf_base_temperature / shelf_base_mass_flux / average_water_column_pressure, and the Constant ocean cross-check columns. Each output is asserted against the dump value AND the analytic reference column, which must coincide (stage1/dumps/surface_ocean/columns.csv).",
+      "time_span": { "start": 0.0, "end": 1.0 },
+      "parameter_overrides": {"x_m":-870967.7419354839,"y_m":-870967.7419354839,"r_m":1231734.3930346312,"lat_deg":-79.6774193548387,"H_m":0.0,"usurf_m":0.0,"bed_m":-1500.0003475867986,"z_s_m":0.0},
+      "assertions": [
+        { "variable": "T_ma", "time": 0.0, "expected": 248.35185483870967, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ms", "time": 0.0, "expected": 248.35185483870967, "tolerance": { "rel": 1e-12 } },
+        { "variable": "precipitation", "time": 0.0, "expected": 5.066404571315777e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "smb", "time": 0.0, "expected": 5.066404571315777e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_accumulation", "time": 0.0, "expected": 5.066404571315777e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_melt", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_runoff", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_mass_flux", "time": 0.0, "expected": 5.066404571315777e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "surface_temperature", "time": 0.0, "expected": 248.35185483870967, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 273.15, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.2298625736526746e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbtemp_const", "time": 0.0, "expected": 273.15, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelfbmassflux_const", "time": 0.0, "expected": 1.4970379626184034e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "awcp_const", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } },
+        { "variable": "T_ma", "time": 0.0, "expected": 248.35185483870967, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_temperature", "time": 0.0, "expected": 273.15, "tolerance": { "rel": 1e-12 } },
+        { "variable": "shelf_base_mass_flux", "time": 0.0, "expected": 1.2298625736526744e-06, "tolerance": { "rel": 1e-12 } },
+        { "variable": "average_water_column_pressure", "time": 0.0, "expected": 0.0, "tolerance": { "rel": 1e-12 } }
+      ]
+    }
+      ]
+    }
+  }
+}

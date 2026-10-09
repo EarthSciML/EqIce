@@ -1,0 +1,219 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "surface_forcing_templates",
+    "description": "Expression-template library for the PISM atmosphere / ocean / surface forcing components (stage 2 of the eqice project). Carries the Martin et al. (2011) mean-annual air temperature (shared by the PIK atmosphere air_temperature and the PIK surface temperature), the YearlyCycle cosine temperature cycle, the driver's prescribed precipitation field and surface SMB ablation blob (the Stage-1 driver wiring, not PISM physics: atmosphere::PIK and surface::PIK hold their fields constant, reading them from files in real runs), the PIK ocean kernels (pressure melting point shelf_base_temperature, the Beckmann-Goosse shelf_base_elevation / freezing temperature / ocean heat flux / mass flux chain, and the average_water_column_pressure integral at a margin), the constant-ocean mass flux, and the PIK surface SMB partition (dummy_accumulation/dummy_melt/dummy_runoff). Free names in template bodies (T0, beta_CC, rho_i, rho_w, g, salinity, melt_factor, c_p_ocean, gamma_T, L, precip_scale, abl_peak, melt_rate_m_per_s) resolve against the importing model's declared parameters (esm-spec 9.6.1). Reference implementation: PISM v2.3.2 (stage1/pism/src/coupler/atmosphere/PIK.cc, YearlyCycle.cc, ocean/ConstantPIK.cc, ocean/Constant.cc, ocean/OceanModel.cc, util/pism_utilities.cc, surface/ConstantPIK.cc, SurfaceModel.cc)."
+  },
+  "expression_templates": {
+    "martin_mean_annual_temperature": {
+      "description": "Martin et al. (2011) eq. (1) mean-annual near-surface air temperature T_ma = 273.15 + 30 - 0.0075*usurf - 0.68775*lat*(-1) K (linear in latitude and surface elevation; atmosphere::PIK::martin2011_mean_annual, also surface::PIK::update_impl).",
+      "params": ["usurf_m", "lat_deg"],
+      "match": { "op": "martin_mean_annual_temperature", "args": ["usurf_m", "lat_deg"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "-",
+            "args": [
+              { "op": "+", "args": [273.15, 30.0] },
+              { "op": "*", "args": [0.0075, "usurf_m"] }
+            ] },
+          { "op": "*", "args": [0.68775, "lat_deg"] }
+        ]
+      }
+    },
+    "yearly_cycle_temperature": {
+      "description": "YearlyCycle temp_time_series T(t) = T_ma + (T_ms - T_ma) cos(2 pi (year_frac - summerday_frac)) (atmosphere::YearlyCycle::temp_time_series_impl); for the martin parameterization T_ms = T_ma so the cycle is flat.",
+      "params": ["T_ma_K", "T_ms_K", "year_frac", "summerday_frac"],
+      "match": { "op": "yearly_cycle_temperature", "args": ["T_ma_K", "T_ms_K", "year_frac", "summerday_frac"] },
+      "body": {
+        "op": "+",
+        "args": [
+          "T_ma_K",
+          { "op": "*",
+            "args": [
+              { "op": "-", "args": ["T_ms_K", "T_ma_K"] },
+              { "op": "cos",
+                "args": [ { "op": "*",
+                            "args": [2.0, 3.141592653589793,
+                                     { "op": "-", "args": ["year_frac", "summerday_frac"] }] } ] }
+            ] }
+        ]
+      }
+    },
+    "prescribed_precipitation": {
+      "description": "Stage-1 driver's prescribed time-independent precipitation field P(r) = precip_scale*(2 + cos(pi r/Lx)) kg m^-2 s^-1 with precip_scale = 100 kg m^-2 yr^-1 converted to kg m^-2 s^-1 (1 year = 3.15569259747e7 s, the UDUNITS tropical year); the driver fills atmosphere::PIK's precipitation field with it (instrument_surface_ocean.cc). In real PISM runs this field is read from a file (atmosphere.pik.file) and held constant.",
+      "params": ["r_m", "Lx_m"],
+      "match": { "op": "prescribed_precipitation", "args": ["r_m", "Lx_m"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "precip_scale",
+          { "op": "+",
+            "args": [2.0,
+                     { "op": "cos",
+                       "args": [ { "op": "*",
+                                   "args": [3.141592653589793, { "op": "/", "args": ["r_m", "Lx_m"] }] } ] }] }
+        ]
+      }
+    },
+    "surface_ablation_blob": {
+      "description": "Stage-1 driver's deterministic ablation blob on the warm-north floating shelf: abl_peak*exp(-(x^2 + (y - 0.5 Ly)^2)/sigma^2) kg m^-2 s^-1 with abl_peak = 300 kg m^-2 yr^-1 (converted to kg m^-2 s^-1) and sigma = 250 km (instrument_surface_ocean.cc); the driver prescribes surface::PIK's SMB as precipitation minus this blob. Driver wiring, not PISM physics.",
+      "params": ["x_m", "y_m", "Ly_m", "sigma_m"],
+      "match": { "op": "surface_ablation_blob", "args": ["x_m", "y_m", "Ly_m", "sigma_m"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "abl_peak",
+          { "op": "exp",
+            "args": [ { "op": "-",
+                        "args": [ { "op": "/",
+                                    "args": [
+                                      { "op": "+",
+                                        "args": [
+                                          { "op": "^", "args": ["x_m", 2] },
+                                          { "op": "^",
+                                            "args": [ { "op": "-",
+                                                        "args": ["y_m", { "op": "*", "args": [0.5, "Ly_m"] }] }, 2 ] }
+                                        ] },
+                                      { "op": "^", "args": ["sigma_m", 2] }
+                                    ] } ] } ] }
+        ]
+      }
+    },
+    "shelf_base_temperature": {
+      "description": "Linear pressure melting point of fresh ice at the shelf base T_shelf = T0 - beta_CC * rho_i * g * H (ocean::PIK::melting_point_temperature, identical in ocean::Constant); DEcreases with ice thickness. Shared by both the PIK and Constant oceans.",
+      "params": ["H_m"],
+      "match": { "op": "shelf_base_temperature", "args": ["H_m"] },
+      "body": {
+        "op": "-",
+        "args": [
+          "T0",
+          { "op": "*", "args": ["beta_CC", "rho_i", "g", "H_m"] }
+        ]
+      }
+    },
+    "shelf_base_elevation": {
+      "description": "Shelf base elevation z_b = -(rho_i/rho_w) * H (ocean::PIK::mass_flux, 'shelfbaseelev'); the depth of the ice base below sea level for floating ice.",
+      "params": ["H_m"],
+      "match": { "op": "shelf_base_elevation", "args": ["H_m"] },
+      "body": {
+        "op": "-",
+        "args": [ { "op": "*", "args": [ { "op": "/", "args": ["rho_i", "rho_w"] }, "H_m" ] } ]
+      }
+    },
+    "beckmann_goosse_freezing_temperature": {
+      "description": "Freezing temperature of ocean water under the shelf T_f = 273.15 + (0.0939 - 0.057*S + 7.64e-4*z_b) K (ocean::PIK::mass_flux, Beckmann & Goosse 2003 eq. 2), with S the ocean salinity and z_b the (negative) shelf base elevation.",
+      "params": ["z_b_m"],
+      "match": { "op": "beckmann_goosse_freezing_temperature", "args": ["z_b_m"] },
+      "body": {
+        "op": "+",
+        "args": [
+          273.15,
+          { "op": "+",
+            "args": [
+              { "op": "-", "args": [0.0939, { "op": "*", "args": [0.057, "salinity"] }] },
+              { "op": "*", "args": [7.64e-4, "z_b_m"] }
+            ] }
+        ]
+      }
+    },
+    "ocean_to_ice_heat_flux": {
+      "description": "Ocean-to-ice heat flux Q = melt_factor * rho_w * c_p_ocean * gamma_T * (T_ocean - T_f) W/m^2 (ocean::PIK::mass_flux, Beckmann & Goosse 2003); positive when T_ocean > T_f (melting).",
+      "params": ["T_ocean_K", "T_f_K"],
+      "match": { "op": "ocean_to_ice_heat_flux", "args": ["T_ocean_K", "T_f_K"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "melt_factor",
+          "rho_w",
+          "c_p_ocean",
+          "gamma_T",
+          { "op": "-", "args": ["T_ocean_K", "T_f_K"] }
+        ]
+      }
+    },
+    "shelf_base_mass_flux": {
+      "description": "Shelf base mass flux mass_flux = Q / L kg m^-2 s^-1 (ocean::PIK::mass_flux; the C++ divides by L*ice_density and multiplies by ice_density, net Q/L); positive = melting (the geometry update has dH_BMB = -dt*mf/rho_i).",
+      "params": ["ocean_heat_flux_W_m2"],
+      "match": { "op": "shelf_base_mass_flux", "args": ["ocean_heat_flux_W_m2"] },
+      "body": {
+        "op": "/",
+        "args": ["ocean_heat_flux_W_m2", "L"]
+      }
+    },
+    "ice_bottom_elevation": {
+      "description": "Ice bottom elevation ice_bottom = max(bed, z_s - rho_i/rho_w*H) (pism::average_water_column_pressure, util/pism_utilities.cc): the floatation level z_s - (rho_i/rho_w) H for floating ice, the bed for grounded ice.",
+      "params": ["H_m", "bed_m", "z_s_m"],
+      "match": { "op": "ice_bottom_elevation", "args": ["H_m", "bed_m", "z_s_m"] },
+      "body": {
+        "op": "max",
+        "args": [
+          "bed_m",
+          { "op": "-",
+            "args": [ "z_s_m",
+                      { "op": "*", "args": [ { "op": "/", "args": ["rho_i", "rho_w"] }, "H_m" ] } ] }
+        ]
+      }
+    },
+    "water_column_height": {
+      "description": "Water column height h_w = max(z_s - ice_bottom, 0) (pism::average_water_column_pressure, util/pism_utilities.cc).",
+      "params": ["z_s_m", "ice_bottom_m"],
+      "match": { "op": "water_column_height", "args": ["z_s_m", "ice_bottom_m"] },
+      "body": {
+        "op": "max",
+        "args": [ { "op": "-", "args": ["z_s_m", "ice_bottom_m"] }, 0.0 ]
+      }
+    },
+    "average_water_column_pressure": {
+      "description": "Vertically-averaged water column pressure over an ice cliff at a margin P = 0.5 rho_w g h_w^2 / H for H > 0, else 0 (pism::average_water_column_pressure, util/pism_utilities.cc); NOT rho_w g h_w -- the depth-averaged form.",
+      "params": ["H_m", "h_w_m"],
+      "match": { "op": "average_water_column_pressure", "args": ["H_m", "h_w_m"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": ["H_m", 0.0] },
+          { "op": "*",
+            "args": [ 0.5, "rho_w", "g",
+                      { "op": "/", "args": [ { "op": "^", "args": ["h_w_m", 2] }, "H_m" ] } ] },
+          0.0
+        ]
+      }
+    },
+    "constant_ocean_mass_flux": {
+      "description": "Constant ocean mass flux = melt_rate * rho_i kg m^-2 s^-1 (ocean::Constant::update_impl), with melt_rate the configured ocean.constant.melt_rate converted to m/s.",
+      "params": ["melt_rate_m_per_s"],
+      "match": { "op": "constant_ocean_mass_flux", "args": ["melt_rate_m_per_s"] },
+      "body": {
+        "op": "*",
+        "args": ["melt_rate_m_per_s", "rho_i"]
+      }
+    },
+    "smb_accumulation": {
+      "description": "PIK surface accumulation = max(smb, 0) (SurfaceModel::dummy_accumulation).",
+      "params": ["smb"],
+      "match": { "op": "smb_accumulation", "args": ["smb"] },
+      "body": {
+        "op": "max",
+        "args": ["smb", 0.0]
+      }
+    },
+    "smb_melt_runoff": {
+      "description": "PIK surface melt = runoff = max(-smb, 0) (SurfaceModel::dummy_melt / dummy_runoff; all melt runs off).",
+      "params": ["smb"],
+      "match": { "op": "smb_melt_runoff", "args": ["smb"] },
+      "body": {
+        "op": "max",
+        "args": [ { "op": "-", "args": ["smb"] }, 0.0 ]
+      }
+    },
+    "surface_mass_flux_identity": {
+      "description": "SMB identity mass_flux = accumulation - runoff (SurfaceModel::dummy_* partition guarantees SMB = accumulation - runoff).",
+      "params": ["accumulation", "runoff"],
+      "match": { "op": "surface_mass_flux_identity", "args": ["accumulation", "runoff"] },
+      "body": {
+        "op": "-",
+        "args": ["accumulation", "runoff"]
+      }
+    }
+  }
+}
