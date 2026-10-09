@@ -585,13 +585,105 @@ verification test V (van der Veen / CFBC floating shelf).
 - **C++ bugs** — none new; the SSA analysis found no additional issues in
   the instrumented code (bugs.md #1–#6 unchanged).
 
+## Milestone 4 (continued) — Stage 2: PISM ice-energy (EnthalpyModel) component authored and passing ✅
+
+The fourth Stage-2 deliverable: the PISM ice-energy boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1 energy
+dumps (`stage1/dumps/energy/`, one 10-yr `EnthalpyModel` step of the test-F
+exact-solution field). The scope is the **column solve** of
+`enthSystemCtx`/`EnthalpyModel` (diffusion + vertical advection + explicit
+horizontal advection + strain heating + surface Dirichlet + basal heat flux +
+fine/coarse interpolation + basal melt rate), plus the DrainageCalculator
+rate curve via the templates. TemperatureModel, BedThermalUnit, CHSystem and
+the coupled 31×31 3-D field are **deferred** (documented below).
+
+- **Deliverable** ✅ — `stage2/ice_energy.esm` (model EnthalpyColumn: 56
+  vars, 19 eqs) importing the shared math by reference from
+  `stage2/energy_templates.esm` (column-grid contract: metaparameters Mz=61 /
+  Mz_fine=62, index sets `lev`/`lev_f`; templates `energy_thermal_diffusivity`,
+  `energy_vertical_diffusion`, `energy_vertical_advection`,
+  `energy_horizontal_advection`, `energy_coarse_to_fine`,
+  `energy_fine_to_coarse`, `energy_drainage_rate`) and
+  `stage2/ice_rheology_templates.esm` (enthalpy-converter free names). Both
+  template libraries are first-time commits alongside the component.
+- **Equations as math** ✅ — the state is the fine-grid enthalpy E_f on
+  `lev_f`; the semi-discrete model is
+  `dE_f/dt = D(K·D(E_f,z),z) − w·dE_f/dz + horizontal_advection + strain`,
+  with the BOMBPROOF column stencils of enthSystemCtx::solve as rewrite
+  rules (`energy_vertical_diffusion` rewrites the compound `D(K*D(E_f,z),z)`
+  at priority 10; the basal row is the Neumann row of set_basal_neumann_bc
+  with the geothermal gradient G, interior rows 2..ks the mean-face stencil,
+  rows ks+1..0). The surface row and the atmosphere are pinned to the
+  surface Dirichlet value Enth_ks in the initial condition; all four terms
+  vanish there, so the pinned rows stay put under the harness integration.
+  The cold/temperate K switch (assemble_R, K = k/(rho·c) or ratio·k/(rho·c))
+  is assembled **once from the initial enthalpy** with the C++ basal special
+  case K[0]←Enth[1] (the model writes it as a frozen faq over `E_f_init`).
+- **Sign finding (vertical advection)** — the C++ tridiagonal is
+  `D = I − dt·M`, so the vertical advection's contribution to the ODE
+  `dE/dt = M·E + b` is the **negative** of the `energy_vertical_advection`
+  stencil body (physical `−w·∂E/∂z`). The model writes
+  `... − energy_vertical_advection(E_f, w_eff) + ...`; the wrong-sign ODE
+  diverges from the dump by ~960 J/kg, the corrected one by ≤35 J/kg (dome
+  base) / ≤1.5 J/kg elsewhere. The basal advection carries w[1]·A_b·G, which
+  is zero because w[1] = 0 at the bed for the test columns (no basal melt).
+- **C++-sign bug found in the head-start template (fixed)** —
+  `energy_horizontal_advection` negated the v-term (through its `-` op) but
+  **not** the u-term: it produced `+u·(E−E_w)/dx − v·(E−E_s)/dx` where the
+  C++ RHS subtracts both upwind fluxes. The error was invisible for the
+  zero-velocity columns and only surfaced in the shorter non-marginal columns
+  with nonzero horizontal flow (c21_15, c26_15; c15_21 passed because its
+  velocity is along v). Fixed by wrapping the sum of the two upwind fluxes in
+  the leading negation: `hadv = −(u·(E−E_w)/dx + v·(E−E_s)/dx)`. Verified: the
+  wrong-sign model reproduces the harness's failing values exactly
+  (67550.9555 at c21_15 lev 10), the corrected one reproduces the dump to
+  the ODE-integration gap.
+- **Tests** ✅ — 104 assertions across 10 tests, passing under
+  `--compiler interpreter` (BDF default and `--solver sdirk`): `ic_*` at
+  t=0 (6 exact assertions each on the pinned fine-grid enthalpy and the
+  storage-grid E_out) and `step_*` at t = dt for all 5 columns (E_out vs the
+  dump at selected storage levels, the surface/atmosphere pinning, and the
+  basal melt rate). Because the harness cannot force PISM's single
+  implicit-Euler step, it integrates the semi-discrete operator and the
+  assertions use abs tolerances = 2.5× the measured integration-scheme gap
+  (dome base ≤35 J/kg, ≤1.5 J/kg elsewhere, c27_15 ≤9.25 J/kg near the
+  surface; bmelt dump 1.0891e-10 m/s at the dome, 0 elsewhere).
+- **Harness findings (documented in the file comments)** —
+  1. the native compiler refuses the `K` faq ("const-cadence … unresolved
+     symbol i"); tests run with `--compiler interpreter` (same documented
+     harness limitation as ssa.esm);
+  2. `coords` in assertions are **1-based** (like the `index` op): `lev` and
+     `lev_f` coordinates are written +1 relative to the 0-based dump arrays,
+     and the C++ 0-based m_c2f/m_f2c maps are baked in as 1-based parameters;
+  3. booleans are not allowed in the schema, so `marginal` and the three
+     `exclude_*` gates are 0/1 numbers;
+  4. no document-level `index_sets` (would conflict with the template
+     imports); `lev`/`lev_f` come from the templates' metaparameters;
+  5. a match-less template (advection, f2c) is invoked via
+     `apply_expression_template {name, bindings}`; the compound
+     `energy_vertical_diffusion` fires through its match rule;
+  6. the initial-condition equation `rhs` must be the bare parameter
+     `"E_f_init"` (a faq RHS is rejected).
+- **Verification** ✅ — `./esm validate` clean on both files; `./esm info`
+  lists EnthalpyColumn (56 vars, 19 eqs); `./esm units --check`: 19
+  consistent / 0 mismatched; regressions: ice_rheology.esm 313/313, sia.esm
+  48/48, ssa.esm 26/26 (all `--compiler interpreter`).
+- **C++ bugs** — none new; the horizontal-advection sign discrepancy was a
+  template-authoring error on this side, not a C++ defect (bugs.md #1–#6
+  unchanged).
+- **Deferred (documented)** — TemperatureModel, BedThermalUnit, CHSystem
+  (chemistry), the warm/floating basal branches of basal_melt_rate, the
+  post-solve drainage/bulge-limit post-processing of DrainageCalculator
+  (only the rate curve is tested), and the coupled 31×31 3-D field with
+  horizontal exchange; these are follow-up components/subassemblies.
+
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from
 Stage-1 tuples, fill in physics, review + merge into EarthSciModels.
-Rheology (milestone 4 above) is done; the remaining boundaries follow the
-PLAN.md §5 sequencing (SIA/SSA → energy → basal/hydrology → bed →
-surface/ocean/calving → subassemblies).
+Rheology, SIA/SSA, and the energy column (milestones 4 above) are done; the
+remaining boundaries follow the PLAN.md §5 sequencing (basal/hydrology →
+bed → surface/ocean/calving → subassemblies).
 
 ## Stage 3 — Top-level `eqice.esm` (not started)
 
