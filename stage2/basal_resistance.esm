@@ -1,0 +1,1597 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "basal_resistance",
+    "description": "PISM basal-strength component (stage 2 of the eqice project): the pointwise Mohr-Coulomb till model (MohrCoulombPointwise::effective_pressure / yield_stress / till_friction_angle), the MohrCoulombYieldStress tauc map (update_impl with the ice-free high_tauc branch and P_overburden = rho*g*H), the constant yield-stress model, and the three basal-resistance drag laws selectable through stress_balance.ssa.basal_drag.law (IceBasalResistancePlasticLaw, the PISM default SSA law, with the 0.01 m/yr Schoof regularization; IceBasalResistancePseudoPlasticLaw; IceBasalResistanceRegularizedLaw, the Zoet et al. 2020 regularized Coulomb law) -- each drag law its own model so the SSA component can import the configured one by reference. All shared math is imported by reference from ./basal_templates.esm. Tests assert the instantaneous boundary outputs dumped by the instrumented PISM v2.3.2 run (stage1/dumps/basal_strength/). OptTillphiYieldStress (inverse friction-angle optimization, I) and the SSA consumption of beta are deferred."
+  },
+  "models": {
+    "MohrCoulombPointwise": {
+      "expression_template_imports": [
+        {
+          "ref": "./basal_templates.esm"
+        }
+      ],
+      "variables": {
+        "delta": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.02,
+          "description": "fraction of overburden pressure delta (basal_yield_stress.mohr_coulomb.till_effective_fraction_overburden)"
+        },
+        "P_overburden": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "overburden pressure P_o = rho_ice*g*H"
+        },
+        "water_thickness": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "till water thickness W_till"
+        },
+        "phi_deg": {
+          "type": "parameter",
+          "units": "degrees",
+          "default": 30.0,
+          "description": "till friction angle phi in degrees"
+        },
+        "W_till_max": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "maximum till water thickness (hydrology.tillwat_max)"
+        },
+        "till_cohesion": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "till cohesion c_0 (basal_yield_stress.mohr_coulomb.till_cohesion)"
+        },
+        "N0": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "reference effective pressure N_0 (basal_yield_stress.mohr_coulomb.till_reference_effective_pressure)"
+        },
+        "e0": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.69,
+          "description": "reference void ratio e_0 (basal_yield_stress.mohr_coulomb.till_reference_void_ratio)"
+        },
+        "Cc": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.12,
+          "description": "till compressibility coefficient C_c (basal_yield_stress.mohr_coulomb.till_compressibility_coefficient)"
+        },
+        "N_interior": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "un-clamped Tulaczyk effective pressure N0*(delta*P/N0)^s*10^((e0/Cc)*(1-s)), s = W_till/W_till_max"
+        },
+        "N_till": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "effective pressure on till N_till = min(P_overburden, N_interior)"
+        },
+        "tauc": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "basal yield stress tauc = c0 + tan(phi) N_till"
+        },
+        "phi_inverse_deg": {
+          "type": "unknown",
+          "units": "degrees",
+          "description": "till friction angle recovered from tauc: (180/pi) atan((tauc - c0)/N_till)"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "MohrCoulombPointwise::effective_pressure, un-clamped Tulaczyk et al. (2000) formula (the N_interior column of the dump).",
+          "lhs": "N_interior",
+          "rhs": {
+            "op": "mohr_coulomb_N_interior",
+            "args": [
+              "delta",
+              "P_overburden",
+              "water_thickness"
+            ]
+          }
+        },
+        {
+          "_comment": "MohrCoulombPointwise::effective_pressure with the min(P_overburden, .) saturation clamp.",
+          "lhs": "N_till",
+          "rhs": {
+            "op": "mohr_coulomb_effective_pressure",
+            "args": [
+              "delta",
+              "P_overburden",
+              "water_thickness"
+            ]
+          }
+        },
+        {
+          "_comment": "MohrCoulombPointwise::yield_stress: tauc = c0 + tan(phi) N_till.",
+          "lhs": "tauc",
+          "rhs": {
+            "op": "mohr_coulomb_yield_stress",
+            "args": [
+              "N_till",
+              "phi_deg",
+              "till_cohesion"
+            ]
+          }
+        },
+        {
+          "_comment": "MohrCoulombPointwise::till_friction_angle: the inverse of yield_stress; the round trip phi -> tauc -> phi must recover phi.",
+          "lhs": "phi_inverse_deg",
+          "rhs": {
+            "op": "mohr_coulomb_friction_angle",
+            "args": [
+              "N_till",
+              "tauc",
+              "till_cohesion"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "yield_stress_tuple_1",
+          "description": "Mohr-Coulomb yield stress at delta=0.01, P_overburden=0 Pa, water_thickness=0 m, phi=0 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 0,
+            "water_thickness": 0,
+            "phi_deg": 0
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_2",
+          "description": "Mohr-Coulomb yield stress at delta=0.01, P_overburden=0 Pa, water_thickness=0 m, phi=45 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 0,
+            "water_thickness": 0,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_3",
+          "description": "Mohr-Coulomb yield stress at delta=0.01, P_overburden=1000000 Pa, water_thickness=2 m, phi=0 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 2,
+            "phi_deg": 0
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 10000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_4",
+          "description": "Mohr-Coulomb yield stress at delta=0.01, P_overburden=1000000 Pa, water_thickness=2.5 m, phi=20 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 2.5,
+            "phi_deg": 20
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 649.38163157621136, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 236.35558457296236, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_5",
+          "description": "Mohr-Coulomb yield stress at delta=0.01, P_overburden=10000000 Pa, water_thickness=2 m, phi=5 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 10000000,
+            "water_thickness": 2,
+            "phi_deg": 5
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 100000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 8748.8663525924003, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_6",
+          "description": "Mohr-Coulomb yield stress at delta=0.01, P_overburden=30000000 Pa, water_thickness=1 m, phi=45 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 30000000,
+            "water_thickness": 1,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 12988548.708655048, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 12988548.708655046, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_7",
+          "description": "Mohr-Coulomb yield stress at delta=0.02, P_overburden=5000000 Pa, water_thickness=0.1 m, phi=5 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.02,
+            "P_overburden": 5000000,
+            "water_thickness": 0.1,
+            "phi_deg": 5
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 5000000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 437443.31762962003, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_8",
+          "description": "Mohr-Coulomb yield stress at delta=0.02, P_overburden=20000000 Pa, water_thickness=-1 m, phi=45 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.02,
+            "P_overburden": 20000000,
+            "water_thickness": -1,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 20000000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 19999999.999999996, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_9",
+          "description": "Mohr-Coulomb yield stress at delta=0.02, P_overburden=30000000 Pa, water_thickness=4 m, phi=20 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.02,
+            "P_overburden": 30000000,
+            "water_thickness": 4,
+            "phi_deg": 20
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 640.18058761401221, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 233.00667844654708, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_10",
+          "description": "Mohr-Coulomb yield stress at delta=0.05, P_overburden=5000000 Pa, water_thickness=1.5 m, phi=45 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.05,
+            "P_overburden": 5000000,
+            "water_thickness": 1.5,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 1721690.1963120629, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 1721690.1963120627, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_11",
+          "description": "Mohr-Coulomb yield stress at delta=0.05, P_overburden=20000000 Pa, water_thickness=1 m, phi=20 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.05,
+            "P_overburden": 20000000,
+            "water_thickness": 1,
+            "phi_deg": 20
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 20000000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 7279404.6853240468, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_12",
+          "description": "Mohr-Coulomb yield stress at delta=0.05, P_overburden=50000000 Pa, water_thickness=0.5 m, phi=5 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.05,
+            "P_overburden": 50000000,
+            "water_thickness": 0.5,
+            "phi_deg": 5
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 50000000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 4374433.1762962006, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_13",
+          "description": "Mohr-Coulomb yield stress at delta=0.2, P_overburden=1000000 Pa, water_thickness=0 m, phi=45 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.2,
+            "P_overburden": 1000000,
+            "water_thickness": 0,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 1000000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 999999.99999999988, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_14",
+          "description": "Mohr-Coulomb yield stress at delta=0.2, P_overburden=20000000 Pa, water_thickness=4 m, phi=5 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.2,
+            "P_overburden": 20000000,
+            "water_thickness": 4,
+            "phi_deg": 5
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 28452.470560622765, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 2489.2686233595837, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "yield_stress_tuple_15",
+          "description": "Mohr-Coulomb yield stress at delta=0.2, P_overburden=50000000 Pa, water_thickness=2 m, phi=45 deg (stage1/dumps/basal_strength/yield_stress.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.2,
+            "P_overburden": 50000000,
+            "water_thickness": 2,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "N_till", "time": 0.0, "expected": 10000000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 9999999.9999999981, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_1",
+          "description": "Effective pressure at delta=0.01, P_overburden=0 Pa, water_thickness=0 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 0,
+            "water_thickness": 0
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 562341325.1903491, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_2",
+          "description": "Effective pressure at delta=0.01, P_overburden=1000000 Pa, water_thickness=0 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 0
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 562341325.1903491, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 1000000, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_3",
+          "description": "Effective pressure at delta=0.01, P_overburden=1000000 Pa, water_thickness=1 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 1
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 2371373.7056616554, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 1000000, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_4",
+          "description": "Effective pressure at delta=0.01, P_overburden=1000000 Pa, water_thickness=1.5 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 1.5
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 153992.6526059492, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 153992.6526059492, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_5",
+          "description": "Effective pressure at delta=0.01, P_overburden=1000000 Pa, water_thickness=2 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 2
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 10000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 10000, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_6",
+          "description": "Effective pressure at delta=0.01, P_overburden=1000000 Pa, water_thickness=2.5 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 2.5
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 649.38163157621136, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 649.38163157621136, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_7",
+          "description": "Effective pressure at delta=0.01, P_overburden=1000000 Pa, water_thickness=4 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 1000000,
+            "water_thickness": 4
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 0.17782794100389229, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 0.17782794100389229, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_8",
+          "description": "Effective pressure at delta=0.01, P_overburden=5000000 Pa, water_thickness=2.5 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 5000000,
+            "water_thickness": 2.5
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 4855.2601566246758, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 4855.2601566246758, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_9",
+          "description": "Effective pressure at delta=0.01, P_overburden=10000000 Pa, water_thickness=1 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 10000000,
+            "water_thickness": 1
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 7498942.0933245579, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 7498942.0933245579, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_10",
+          "description": "Effective pressure at delta=0.02, P_overburden=30000000 Pa, water_thickness=4 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.02,
+            "P_overburden": 30000000,
+            "water_thickness": 4
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 640.18058761401221, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 640.18058761401221, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_11",
+          "description": "Effective pressure at delta=0.05, P_overburden=50000000 Pa, water_thickness=0.5 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.05,
+            "P_overburden": 50000000,
+            "water_thickness": 0.5
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 145206147.15441325, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 50000000, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "effective_pressure_tuple_12",
+          "description": "Effective pressure at delta=0.2, P_overburden=50000000 Pa, water_thickness=2 m (stage1/dumps/basal_strength/effective_pressure.csv): N_interior is the un-clamped Tulaczyk formula, N_till its min(P, .) clamp.",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.2,
+            "P_overburden": 50000000,
+            "water_thickness": 2
+          },
+          "assertions": [
+            { "variable": "N_interior", "time": 0.0, "expected": 10000000, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 10000000, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "friction_angle_tuple_1",
+          "description": "Till friction angle round trip at delta=0.01, P_overburden=20000000 Pa, water_thickness=1.5 m, phi=20 deg: tauc = yield_stress(phi), then phi_inverse = till_friction_angle(tauc) must recover phi (stage1/dumps/basal_strength/till_friction_angle.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.01,
+            "P_overburden": 20000000,
+            "water_thickness": 1.5,
+            "phi_deg": 20
+          },
+          "assertions": [
+            { "variable": "tauc", "time": 0.0, "expected": 530076.27294395259, "tolerance": { "rel": 1e-12 } },
+            { "variable": "phi_inverse_deg", "time": 0.0, "expected": 20.000000000000004, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "friction_angle_tuple_2",
+          "description": "Till friction angle round trip at delta=0.02, P_overburden=5000000 Pa, water_thickness=0.1 m, phi=5 deg: tauc = yield_stress(phi), then phi_inverse = till_friction_angle(tauc) must recover phi (stage1/dumps/basal_strength/till_friction_angle.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.02,
+            "P_overburden": 5000000,
+            "water_thickness": 0.1,
+            "phi_deg": 5
+          },
+          "assertions": [
+            { "variable": "tauc", "time": 0.0, "expected": 437443.31762962003, "tolerance": { "rel": 1e-12 } },
+            { "variable": "phi_inverse_deg", "time": 0.0, "expected": 5, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "friction_angle_tuple_3",
+          "description": "Till friction angle round trip at delta=0.02, P_overburden=50000000 Pa, water_thickness=2.5 m, phi=45 deg: tauc = yield_stress(phi), then phi_inverse = till_friction_angle(tauc) must recover phi (stage1/dumps/basal_strength/till_friction_angle.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.02,
+            "P_overburden": 50000000,
+            "water_thickness": 2.5,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "tauc", "time": 0.0, "expected": 205352.50264571459, "tolerance": { "rel": 1e-12 } },
+            { "variable": "phi_inverse_deg", "time": 0.0, "expected": 45, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "friction_angle_tuple_4",
+          "description": "Till friction angle round trip at delta=0.05, P_overburden=20000000 Pa, water_thickness=1 m, phi=20 deg: tauc = yield_stress(phi), then phi_inverse = till_friction_angle(tauc) must recover phi (stage1/dumps/basal_strength/till_friction_angle.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.05,
+            "P_overburden": 20000000,
+            "water_thickness": 1,
+            "phi_deg": 20
+          },
+          "assertions": [
+            { "variable": "tauc", "time": 0.0, "expected": 7279404.6853240468, "tolerance": { "rel": 1e-12 } },
+            { "variable": "phi_inverse_deg", "time": 0.0, "expected": 20, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "friction_angle_tuple_5",
+          "description": "Till friction angle round trip at delta=0.2, P_overburden=5000000 Pa, water_thickness=0 m, phi=5 deg: tauc = yield_stress(phi), then phi_inverse = till_friction_angle(tauc) must recover phi (stage1/dumps/basal_strength/till_friction_angle.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.2,
+            "P_overburden": 5000000,
+            "water_thickness": 0,
+            "phi_deg": 5
+          },
+          "assertions": [
+            { "variable": "tauc", "time": 0.0, "expected": 437443.31762962003, "tolerance": { "rel": 1e-12 } },
+            { "variable": "phi_inverse_deg", "time": 0.0, "expected": 5, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "friction_angle_tuple_6",
+          "description": "Till friction angle round trip at delta=0.2, P_overburden=50000000 Pa, water_thickness=2 m, phi=45 deg: tauc = yield_stress(phi), then phi_inverse = till_friction_angle(tauc) must recover phi (stage1/dumps/basal_strength/till_friction_angle.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "delta": 0.2,
+            "P_overburden": 50000000,
+            "water_thickness": 2,
+            "phi_deg": 45
+          },
+          "assertions": [
+            { "variable": "tauc", "time": 0.0, "expected": 9999999.9999999981, "tolerance": { "rel": 1e-12 } },
+            { "variable": "phi_inverse_deg", "time": 0.0, "expected": 44.999999999999993, "tolerance": { "rel": 1e-12 } }
+          ]
+        }
+      ]
+    },
+    "MohrCoulombYieldStress": {
+      "expression_template_imports": [
+        {
+          "ref": "./basal_templates.esm"
+        }
+      ],
+      "variables": {
+        "rho_ice": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "ice density (constants.ice.density)"
+        },
+        "g": {
+          "type": "parameter",
+          "units": "m/s^2",
+          "default": 9.81,
+          "description": "standard gravity (constants.standard_gravity)"
+        },
+        "H": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "ice thickness"
+        },
+        "W_till": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.0,
+          "description": "till water thickness (the pointwise model uses water = W_till: no slippery_grounding_lines, no add_transportable_water in the instrumented run)"
+        },
+        "phi_deg": {
+          "type": "parameter",
+          "units": "degrees",
+          "default": 30.0,
+          "description": "till friction angle in degrees"
+        },
+        "mask": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2,
+          "description": "cell type mask: 0 = ice-free bedrock, 2 = grounded ice (PISM Mask.hh)"
+        },
+        "delta": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.02,
+          "description": "fraction of overburden pressure (basal_yield_stress.mohr_coulomb.till_effective_fraction_overburden; no delta forcing file in the run)"
+        },
+        "high_tauc": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000000.0,
+          "description": "yield stress in ice-free areas (basal_yield_stress.ice_free_bedrock)"
+        },
+        "W_till_max": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "maximum till water thickness (hydrology.tillwat_max)"
+        },
+        "till_cohesion": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "till cohesion c_0 (basal_yield_stress.mohr_coulomb.till_cohesion)"
+        },
+        "N0": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 1000.0,
+          "description": "reference effective pressure (basal_yield_stress.mohr_coulomb.till_reference_effective_pressure)"
+        },
+        "e0": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.69,
+          "description": "reference void ratio (basal_yield_stress.mohr_coulomb.till_reference_void_ratio)"
+        },
+        "Cc": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.12,
+          "description": "till compressibility coefficient (basal_yield_stress.mohr_coulomb.till_compressibility_coefficient)"
+        },
+        "P_overburden": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "overburden pressure rho_ice*g*H (MohrCoulombYieldStress::update_impl)"
+        },
+        "N_till": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "effective pressure field min(P_overburden, Tulaczyk formula)"
+        },
+        "tauc": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "basal yield stress: high_tauc in ice-free cells, c0 + tan(phi) N_till in grounded cells"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "MohrCoulombYieldStress::update_impl overburden pressure from ice thickness.",
+          "lhs": "P_overburden",
+          "rhs": {
+            "op": "overburden_pressure",
+            "args": [
+              "rho_ice",
+              "g",
+              "H"
+            ]
+          }
+        },
+        {
+          "_comment": "MohrCoulombYieldStress::update_impl effective pressure (recomputed pointwise by the instrument; the N_till column of tauc_map.csv).",
+          "lhs": "N_till",
+          "rhs": {
+            "op": "mohr_coulomb_effective_pressure",
+            "args": [
+              "delta",
+              "P_overburden",
+              "W_till"
+            ]
+          }
+        },
+        {
+          "_comment": "MohrCoulombYieldStress::update_impl: ice-free cells get the high yield stress basal_yield_stress.ice_free_bedrock; grounded cells the Mohr-Coulomb value.",
+          "lhs": "tauc",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              { "op": "==", "args": ["mask", 0] },
+              "high_tauc",
+              { "op": "mohr_coulomb_yield_stress",
+                "args": ["N_till", "phi_deg", "till_cohesion"] }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "tauc_map_cell_15_15",
+          "description": "MohrCoulombYieldStress tauc map cell (i=15, j=15) on the test-F exact geometry: H=2999.9999752362119 m, W_till=3.5555555555555559e-12 m, phi=29.999999999912269 deg, mask=2 (grounded dome cell); tauc = c0 + tan(phi) N_till with N_till = P (W ~ 0, saturated) (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 2999.9999752362119,
+            "W_till": 3.5555555555555559e-12,
+            "phi_deg": 29.999999999912269,
+            "mask": 2,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 26781299.778931189, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 26781299.778931189, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 15462190.636559313, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_14_14",
+          "description": "MohrCoulombYieldStress tauc map cell (i=14, j=14): H=2914.1889470865599 m, W_till=0.023975026014568145 m, phi=29.414249379795574 deg, mask=2 (grounded, still saturated) (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 2914.1889470865599,
+            "W_till": 0.023975026014568145,
+            "phi_deg": 29.414249379795574,
+            "mask": 2,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 26015256.149536431, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 26015256.149536431, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 14667368.841824017, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_20_20",
+          "description": "MohrCoulombYieldStress tauc map cell (i=20, j=20): H=2213.1325836827223 m, W_till=0.59937565036420359 m, phi=18.515217114757256 deg, mask=2 (grounded) (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 2213.1325836827223,
+            "W_till": 0.59937565036420359,
+            "phi_deg": 18.515217114757256,
+            "mask": 2,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 19756855.887794029, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 19756855.887794029, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 6616386.6706077727, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_22_12",
+          "description": "MohrCoulombYieldStress tauc map cell (i=22, j=12): H=2117.7445786660719 m, W_till=0.69527575442247624 m, phi=17.221909853708741 deg, mask=2 (grounded) (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 2117.7445786660719,
+            "W_till": 0.69527575442247624,
+            "phi_deg": 17.221909853708741,
+            "mask": 2,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 18905317.628209893, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 18905317.628209893, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 5860096.4400714384, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_8_6",
+          "description": "MohrCoulombYieldStress tauc map cell (i=8, j=6): H=1171.1479253230789 m, W_till=1.5583766909469301 m, phi=10.671158327455117 deg, mask=2 (grounded, N_till < P: unsaturated) (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 1171.1479253230789,
+            "W_till": 1.5583766909469301,
+            "phi_deg": 10.671158327455117,
+            "mask": 2,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 10454954.644151658, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 1195799.4937830754, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 225325.28401843394, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_16_12",
+          "description": "MohrCoulombYieldStress tauc map cell (i=16, j=12): H=2748.0984045742553 m, W_till=0.11987513007284074 m, phi=27.185164429801009 deg, mask=2 (grounded) (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 2748.0984045742553,
+            "W_till": 0.11987513007284074,
+            "phi_deg": 27.185164429801009,
+            "mask": 2,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 24532549.267474834, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 24532549.267474834, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 12599988.839177717, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_24_18",
+          "description": "MohrCoulombYieldStress tauc map cell (i=24, j=18): H=1731.5417737580515 m, W_till=1.0788761706555672 m, phi=13.282327626233862 deg, mask=2 (grounded) (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 1731.5417737580515,
+            "W_till": 1.0788761706555672,
+            "phi_deg": 13.282327626233862,
+            "mask": 2,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 15457646.568515502, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 9806755.8584804572, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 2315025.2498617964, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_0_15",
+          "description": "MohrCoulombYieldStress tauc map cell (i=0, j=15): ice-free cell (mask=0, H=0 m); tauc must be the high_tauc = 1000000 Pa of basal_yield_stress.ice_free_bedrock regardless of W_till and phi (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 0,
+            "W_till": 2,
+            "phi_deg": 10,
+            "mask": 0,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 1000000, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "tauc_map_cell_30_15",
+          "description": "MohrCoulombYieldStress tauc map cell (i=30, j=15): ice-free cell (mask=0, H=0 m); tauc = high_tauc (stage1/dumps/basal_strength/tauc_map.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "H": 0,
+            "W_till": 2,
+            "phi_deg": 10,
+            "mask": 0,
+            "delta": 0.02
+          },
+          "assertions": [
+            { "variable": "P_overburden", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "N_till", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tauc", "time": 0.0, "expected": 1000000, "tolerance": { "rel": 1e-12 } }
+          ]
+        }
+      ]
+    },
+    "ConstantYieldStress": {
+      "variables": {
+        "constant_value": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 200000.0,
+          "description": "fill value for the constant yield stress (basal_yield_stress.constant.value)"
+        },
+        "tauc": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "constant basal yield stress"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "ConstantYieldStress: tauc is the configured constant value (update_impl is empty; init/regrid fills basal_yield_stress with basal_yield_stress.constant.value).",
+          "lhs": "tauc",
+          "rhs": "constant_value"
+        }
+      ],
+      "tests": [
+        {
+          "id": "constant_value",
+          "description": "Constant yield stress model: tauc = basal_yield_stress.constant.value = 2e5 Pa for any inputs (ConstantYieldStress.cc; config-derived, not from a Stage-1 dump).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "assertions": [
+            { "variable": "tauc", "time": 0.0, "expected": 200000, "tolerance": { "rel": 1e-12 } }
+          ]
+        }
+      ]
+    },
+    "BasalResistancePlastic": {
+      "expression_template_imports": [
+        {
+          "ref": "./basal_templates.esm"
+        }
+      ],
+      "variables": {
+        "tauc": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "yield stress (from the yield-stress model)"
+        },
+        "vx": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "horizontal ice velocity x-component at the bed"
+        },
+        "vy": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "horizontal ice velocity y-component at the bed"
+        },
+        "eps": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.168876464081849e-10,
+          "description": "Schoof plastic regularization 0.01 m/yr (basal_resistance.plastic.regularization; 0.01 m / 3.15569259747e7 s, the UDUNITS tropical year)"
+        },
+        "magreg2": {
+          "type": "unknown",
+          "units": "m^2/s^2",
+          "description": "regularized squared sliding speed eps^2 + vx^2 + vy^2"
+        },
+        "mag_v": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "sliding speed |v| = sqrt(vx^2 + vy^2)"
+        },
+        "beta": {
+          "type": "unknown",
+          "units": "Pa s/m",
+          "description": "drag coefficient beta = tauc/sqrt(eps^2 + v^2); tau_b = -beta v"
+        },
+        "dbeta": {
+          "type": "unknown",
+          "units": "Pa s^3/m^3",
+          "description": "d(beta)/d(alpha) with alpha = 0.5 |v|^2: -beta/(eps^2 + v^2)"
+        },
+        "tau_b_mag": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "basal shear stress magnitude |tau_b| = beta |v|"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Regularized squared speed (IceBasalResistancePlasticLaw::drag).",
+          "lhs": "magreg2",
+          "rhs": {
+            "op": "basal_speed_squared",
+            "args": ["eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "Sliding speed (the |v| dump column).",
+          "lhs": "mag_v",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              { "op": "+", "args": [ { "op": "^", "args": ["vx", 2] }, { "op": "^", "args": ["vy", 2] } ] }
+            ]
+          }
+        },
+        {
+          "_comment": "IceBasalResistancePlasticLaw::drag: beta = tauc / sqrt(eps^2 + vx^2 + vy^2) (PISM's default SSA basal sliding law, stress_balance.ssa.basal_drag.law = plastic).",
+          "lhs": "beta",
+          "rhs": {
+            "op": "plastic_drag",
+            "args": ["tauc", "eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "IceBasalResistancePlasticLaw::drag_with_derivative: dbeta = -beta / (eps^2 + vx^2 + vy^2).",
+          "lhs": "dbeta",
+          "rhs": {
+            "op": "plastic_drag_derivative",
+            "args": ["tauc", "eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "Basal shear stress magnitude |tau_b| = beta |v| (the |tau_b| dump column).",
+          "lhs": "tau_b_mag",
+          "rhs": {
+            "op": "*",
+            "args": ["beta", "mag_v"]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "plastic_tuple_1",
+          "description": "Plastic drag at tauc=1000 Pa, vx=0 m/s, vy=0 m/s: beta = tauc/sqrt(eps^2+v^2), dbeta = -beta/(eps^2+v^2) with eps = 0.01 m/yr; the dump dbeta_fd central-difference cross-check agrees to ~1e-10 (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 0,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "mag_v", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "beta", "time": 0.0, "expected": 3155692597470, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -3.1425635813203914e+31, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "plastic_tuple_2",
+          "description": "Plastic drag at tauc=1000 Pa, vx=1e-08 m/s, vy=0 m/s: beta = tauc/sqrt(eps^2+v^2), dbeta = -beta/(eps^2+v^2) with eps = 0.01 m/yr; the dump dbeta_fd central-difference cross-check agrees to ~1e-10 (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 1e-08,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 99949828892.151276, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -9.9849562178026922e+26, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 999.49828892151277, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "plastic_tuple_3",
+          "description": "Plastic drag at tauc=1000 Pa, vx=0 m/s, vy=3.1689e-06 m/s: beta = tauc/sqrt(eps^2+v^2), dbeta = -beta/(eps^2+v^2) with eps = 0.01 m/yr; the dump dbeta_fd central-difference cross-check agrees to ~1e-10 (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 0,
+            "vy": 3.1689e-06
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 315566914.38671917, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -3.1424935137634497e+19, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 999.99999500007436, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "plastic_tuple_4",
+          "description": "Plastic drag at tauc=10000 Pa, vx=0 m/s, vy=0 m/s: beta = tauc/sqrt(eps^2+v^2), dbeta = -beta/(eps^2+v^2) with eps = 0.01 m/yr; the dump dbeta_fd central-difference cross-check agrees to ~1e-10 (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 10000,
+            "vx": 0,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 31556925974700, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -3.1425635813203916e+32, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "plastic_tuple_5",
+          "description": "Plastic drag at tauc=100000 Pa, vx=1e-07 m/s, vy=0 m/s: beta = tauc/sqrt(eps^2+v^2), dbeta = -beta/(eps^2+v^2) with eps = 0.01 m/yr; the dump dbeta_fd central-difference cross-check agrees to ~1e-10 (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 100000,
+            "vx": 1e-07,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 999994979148.7915, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -9.9998493752200109e+25, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 99999.497914879146, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "plastic_tuple_6",
+          "description": "Plastic drag at tauc=1000000 Pa, vx=7.071067811865475e-05 m/s, vy=-7.071067811865475e-05 m/s: beta depends only on |v| (direction invariance); dbeta_fd cross-check agrees to ~1e-10 (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000000,
+            "vx": 7.071067811865475e-05,
+            "vy": -7.071067811865475e-05
+          },
+          "assertions": [
+            { "variable": "mag_v", "time": 0.0, "expected": 0.0001, "tolerance": { "rel": 1e-12 } },
+            { "variable": "beta", "time": 0.0, "expected": 9999999999.949791, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -9.9999999998493722e+17, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 999999.99999497912, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "plastic_tuple_7",
+          "description": "Plastic drag at tauc=0 Pa, vx=1e-08 m/s, vy=0 m/s: zero yield stress gives beta = 0 and dbeta = -0 (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 0,
+            "vx": 1e-08,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "plastic_tuple_8",
+          "description": "Plastic drag at tauc=200000 Pa, vx=0.0001 m/s, vy=0 m/s: fast sliding limit |tau_b| -> tauc (stage1/dumps/basal_strength/drag_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 200000,
+            "vx": 0.0001,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 1999999999.9899583, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -1.9999999999698746e+17, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 199999.99999899583, "tolerance": { "rel": 1e-12 } }
+          ]
+        }
+      ]
+    },
+    "BasalResistancePseudoPlastic": {
+      "expression_template_imports": [
+        {
+          "ref": "./basal_templates.esm"
+        }
+      ],
+      "variables": {
+        "tauc": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "yield stress"
+        },
+        "vx": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "horizontal ice velocity x-component at the bed"
+        },
+        "vy": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "horizontal ice velocity y-component at the bed"
+        },
+        "eps": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.168876464081849e-10,
+          "description": "Schoof plastic regularization 0.01 m/yr (basal_resistance.plastic.regularization)"
+        },
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25,
+          "description": "pseudo-plastic exponent (basal_resistance.pseudo_plastic.q)"
+        },
+        "u_threshold": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.1688764640818492e-06,
+          "description": "pseudo-plastic threshold speed 100 m/yr (basal_resistance.pseudo_plastic.u_threshold; the sliding_scale_factor branch is off by default, sliding_scale_factor = -1)"
+        },
+        "magreg2": {
+          "type": "unknown",
+          "units": "m^2/s^2",
+          "description": "regularized squared sliding speed eps^2 + vx^2 + vy^2"
+        },
+        "mag_v": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "sliding speed |v| = sqrt(vx^2 + vy^2)"
+        },
+        "beta": {
+          "type": "unknown",
+          "units": "Pa s/m",
+          "description": "drag coefficient beta = tauc |v|^(q-1) u_threshold^(-q)"
+        },
+        "dbeta": {
+          "type": "unknown",
+          "units": "Pa s^3/m^3",
+          "description": "d(beta)/d(alpha), alpha = 0.5 |v|^2: (q-1) beta/(eps^2 + v^2)"
+        },
+        "tau_b_mag": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "basal shear stress magnitude |tau_b| = beta |v|"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Regularized squared speed (IceBasalResistancePseudoPlasticLaw::drag).",
+          "lhs": "magreg2",
+          "rhs": {
+            "op": "basal_speed_squared",
+            "args": ["eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "Sliding speed (the |v| dump column).",
+          "lhs": "mag_v",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              { "op": "+", "args": [ { "op": "^", "args": ["vx", 2] }, { "op": "^", "args": ["vy", 2] } ] }
+            ]
+          }
+        },
+        {
+          "_comment": "IceBasalResistancePseudoPlasticLaw::drag: beta = tauc * magreg2^((q-1)/2) * u_threshold^(-q).",
+          "lhs": "beta",
+          "rhs": {
+            "op": "pseudo_plastic_drag",
+            "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "IceBasalResistancePseudoPlasticLaw::drag_with_derivative: dbeta = (q-1) beta / magreg2.",
+          "lhs": "dbeta",
+          "rhs": {
+            "op": "pseudo_plastic_drag_derivative",
+            "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "Basal shear stress magnitude |tau_b| = beta |v| (the |tau_b| dump column).",
+          "lhs": "tau_b_mag",
+          "rhs": {
+            "op": "*",
+            "args": ["beta", "mag_v"]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "pseudo_plastic_tuple_1",
+          "description": "Pseudo-plastic drag at tauc=1000 Pa, vx=0 m/s, vy=0 m/s: beta = tauc*|v|^(q-1)*u_threshold^(-q), dbeta = (q-1)*beta/|v|^2 with q=0.25, u_threshold=100 m/yr (stage1/dumps/basal_strength/drag_pseudo_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 0,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "mag_v", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "beta", "time": 0.0, "expected": 315569259747, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -2.3569226859902936e+30, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "pseudo_plastic_tuple_2",
+          "description": "Pseudo-plastic drag at tauc=1000 Pa, vx=1e-08 m/s, vy=0 m/s (stage1/dumps/basal_strength/drag_pseudo_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 1e-08,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 23692463159.685036, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -1.7751521685691593e+26, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 236.92463159685036, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "pseudo_plastic_tuple_3",
+          "description": "Pseudo-plastic drag at tauc=1000 Pa, vx=0 m/s, vy=3.1689e-06 m/s: |v| = u_threshold (100 m/yr), so beta = tauc/u_threshold (stage1/dumps/basal_strength/drag_pseudo_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 0,
+            "vy": 3.1689e-06
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 315567500.72515517, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -2.3568745145001435e+19, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 1000.0018530479442, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "pseudo_plastic_tuple_4",
+          "description": "Pseudo-plastic drag at tauc=100000 Pa, vx=1e-07 m/s, vy=0 m/s (stage1/dumps/basal_strength/drag_pseudo_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 100000,
+            "vx": 1e-07,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 421475211602.12488, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -3.1610323446307403e+25, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 42147.521160212484, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "pseudo_plastic_tuple_5",
+          "description": "Pseudo-plastic drag at tauc=1000000 Pa, vx=7.071067811865475e-05 m/s, vy=-7.071067811865475e-05 m/s: direction invariance (stage1/dumps/basal_strength/drag_pseudo_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000000,
+            "vx": 7.071067811865475e-05,
+            "vy": -7.071067811865475e-05
+          },
+          "assertions": [
+            { "variable": "mag_v", "time": 0.0, "expected": 0.0001, "tolerance": { "rel": 1e-12 } },
+            { "variable": "beta", "time": 0.0, "expected": 23701382153.523857, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -1.7776036614964388e+18, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 2370138.2153523858, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "pseudo_plastic_tuple_6",
+          "description": "Pseudo-plastic drag at tauc=200000 Pa, vx=0.0001 m/s, vy=0 m/s: fast-sliding limit (stage1/dumps/basal_strength/drag_pseudo_plastic.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 200000,
+            "vx": 0.0001,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 4740276430.704772, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -3.5552073229928781e+17, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 474027.64307047724, "tolerance": { "rel": 1e-12 } }
+          ]
+        }
+      ]
+    },
+    "BasalResistanceRegularized": {
+      "expression_template_imports": [
+        {
+          "ref": "./basal_templates.esm"
+        }
+      ],
+      "variables": {
+        "tauc": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 0.0,
+          "description": "yield stress"
+        },
+        "vx": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "horizontal ice velocity x-component at the bed"
+        },
+        "vy": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "horizontal ice velocity y-component at the bed"
+        },
+        "eps": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.168876464081849e-10,
+          "description": "Schoof plastic regularization 0.01 m/yr (basal_resistance.plastic.regularization)"
+        },
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25,
+          "description": "regularized-Coulomb exponent (basal_resistance.pseudo_plastic.q; in Zoet et al. 2020 the exponent is q = 1/p)"
+        },
+        "u_threshold": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.1688764640818492e-06,
+          "description": "threshold speed 100 m/yr (basal_resistance.pseudo_plastic.u_threshold)"
+        },
+        "magreg2": {
+          "type": "unknown",
+          "units": "m^2/s^2",
+          "description": "regularized squared sliding speed eps^2 + vx^2 + vy^2"
+        },
+        "mag_v": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "sliding speed |v| = sqrt(vx^2 + vy^2)"
+        },
+        "beta": {
+          "type": "unknown",
+          "units": "Pa s/m",
+          "description": "drag coefficient beta = tauc |v|^(q-1) (|v| + u_threshold)^(-q)"
+        },
+        "dbeta": {
+          "type": "unknown",
+          "units": "Pa s^3/m^3",
+          "description": "d(beta)/d(alpha), alpha = 0.5 |v|^2: ((q-1)/magreg2 - q/(|v_reg|(|v_reg|+u_threshold))) beta"
+        },
+        "tau_b_mag": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "basal shear stress magnitude |tau_b| = beta |v|"
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Regularized squared speed (IceBasalResistanceRegularizedLaw::drag).",
+          "lhs": "magreg2",
+          "rhs": {
+            "op": "basal_speed_squared",
+            "args": ["eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "Sliding speed (the |v| dump column).",
+          "lhs": "mag_v",
+          "rhs": {
+            "op": "sqrt",
+            "args": [
+              { "op": "+", "args": [ { "op": "^", "args": ["vx", 2] }, { "op": "^", "args": ["vy", 2] } ] }
+            ]
+          }
+        },
+        {
+          "_comment": "IceBasalResistanceRegularizedLaw::drag (Zoet et al. 2020): beta = tauc * magreg2^((q-1)/2) * (magreg2^(1/2) + u_threshold)^(-q).",
+          "lhs": "beta",
+          "rhs": {
+            "op": "regularized_drag",
+            "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "IceBasalResistanceRegularizedLaw::drag_with_derivative: dbeta = ((q-1)/magreg2 - q/(|v_reg|(|v_reg|+u_threshold))) * beta.",
+          "lhs": "dbeta",
+          "rhs": {
+            "op": "regularized_drag_derivative",
+            "args": ["tauc", "q", "u_threshold", "eps", "vx", "vy"]
+          }
+        },
+        {
+          "_comment": "Basal shear stress magnitude |tau_b| = beta |v| (the |tau_b| dump column).",
+          "lhs": "tau_b_mag",
+          "rhs": {
+            "op": "*",
+            "args": ["beta", "mag_v"]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "regularized_tuple_1",
+          "description": "Regularized Coulomb drag at tauc=1000 Pa, vx=0 m/s, vy=0 m/s: beta = tauc*|v|^(q-1)*(|v|+u_threshold)^(-q), dbeta = ((q-1)/|v|^2 - q/(|v|(|v|+u_threshold)))*beta with q=0.25, u_threshold=100 m/yr (stage1/dumps/basal_strength/drag_regularized.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 0,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "mag_v", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } },
+            { "variable": "beta", "time": 0.0, "expected": 315561371008.54639, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -2.3569423208756865e+30, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 0, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "regularized_tuple_2",
+          "description": "Regularized Coulomb drag at tauc=1000 Pa, vx=1e-08 m/s, vy=0 m/s (stage1/dumps/basal_strength/drag_regularized.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 1e-08,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 23673799059.893097, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -1.7756146338286498e+26, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 236.73799059893096, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "regularized_tuple_3",
+          "description": "Regularized Coulomb drag at tauc=1000 Pa, vx=0 m/s, vy=3.1689e-06 m/s: |v| = u_threshold (100 m/yr) (stage1/dumps/basal_strength/drag_regularized.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000,
+            "vx": 0,
+            "vy": 3.1689e-06
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 265359333.60483989, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -2.3122009649066783e+19, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 840.8971922603771, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "regularized_tuple_4",
+          "description": "Regularized Coulomb drag at tauc=100000 Pa, vx=1e-07 m/s, vy=0 m/s (stage1/dumps/basal_strength/drag_regularized.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 100000,
+            "vx": 1e-07,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 418214148140.34454, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -3.1685589970283297e+25, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 41821.414814034455, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "regularized_tuple_5",
+          "description": "Regularized Coulomb drag at tauc=1000000 Pa, vx=7.071067811865475e-05 m/s, vy=-7.071067811865475e-05 m/s: direction invariance (stage1/dumps/basal_strength/drag_regularized.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 1000000,
+            "vx": 7.071067811865475e-05,
+            "vy": -7.071067811865475e-05
+          },
+          "assertions": [
+            { "variable": "mag_v", "time": 0.0, "expected": 0.0001, "tolerance": { "rel": 1e-12 } },
+            { "variable": "beta", "time": 0.0, "expected": 9922310760.7099247, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -9.8461187487456486e+17, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 992231.07607099251, "tolerance": { "rel": 1e-12 } }
+          ]
+        },
+        {
+          "id": "regularized_tuple_6",
+          "description": "Regularized Coulomb drag at tauc=200000 Pa, vx=0.0001 m/s, vy=0 m/s: fast-sliding limit (stage1/dumps/basal_strength/drag_regularized.csv).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "tauc": 200000,
+            "vx": 0.0001,
+            "vy": 0
+          },
+          "assertions": [
+            { "variable": "beta", "time": 0.0, "expected": 1984462152.1419849, "tolerance": { "rel": 1e-12 } },
+            { "variable": "dbeta", "time": 0.0, "expected": -1.9692237497491296e+17, "tolerance": { "rel": 1e-12 } },
+            { "variable": "tau_b_mag", "time": 0.0, "expected": 198446.21521419851, "tolerance": { "rel": 1e-12 } }
+          ]
+        }
+      ]
+    }
+  }
+}
