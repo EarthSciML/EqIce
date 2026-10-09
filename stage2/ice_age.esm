@@ -1,0 +1,409 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "ice_age",
+    "description": "PISM ice-age model (AgeModel) column component (stage 2 of the eqice project): the age equation d(tau)/dt + u*d(tau)/dx + v*d(tau)/dy + w*d(tau)/dz = 1 solved on one vertical column of the C++ fine grid with the AgeColumnSystem discretization -- first-order upwind advection, implicit in the vertical, horizontal advection evaluated at the old time from the neighbor-column ages (inputs, zero here), the surface Dirichlet condition tau = 0 (the C++ row m_ks) and the basal accumulation condition tau = 0 when the bed velocity is strictly upward (the C++ AA > 0 row 0). The state tau lives on the 62-level fine vertical grid (dz = Lz/61, the coarse_to_fine grid of columnSystemCtx: 62 levels because ceil(Lz/min_dz)+1 = 62 for the 61-level storage grid with Lz = 4000 m); age_storage is the solution interpolated back to the 61-level storage (dump) grid with the fixed linear-in-level weights of AgeModel::fine_to_coarse. All shared math is imported by reference from ./age_templates.esm. Tests assert age_storage against the one-year age step dumped by the instrumented PISM v2.3.2 run from age = 0 under the exact test-F velocity field (stage1/dumps/age/columns.csv, dt = 315569259.747 s), at the dome column (15,15), the mid-radius columns (11,3) and (6,11), and an ice-free column. The C++ takes one backward-Euler vertical step; the harness integrates the age ODE continuously, so the asserted agreement reflects the exact-ODE solution: it reproduces the dump to <= 1.7e-4 relative at every asserted storage level of the advected columns and <= 6.2e-3 at the two storage levels just below the dome surface (the largest scheme difference, from the vertical time discretization), asserted at rel 1e-3 (deep/mid) and rel 1e-2 (the two near-surface dome levels). Deferred to stage 3: computing the fine-grid surface level ks from the ice thickness (here passed as the C++ ColumnSystemCtx::init_column output), wiring the neighbor-column ages and the 3D velocities from the coupled SIA/SSA components, the full 3-D multi-column coupled solve, and the negative-age clamp of AgeModel::update (not triggered in this test)."
+  },
+  "solver": {
+    "stiffness": "high",
+    "reltol": 1e-8,
+    "abstol": 1e-8
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 62
+    },
+    "lev_s": {
+      "kind": "interval",
+      "size": 61
+    }
+  },
+  "models": {
+    "AgeColumn": {
+      "expression_template_imports": [
+        {
+          "ref": "./age_templates.esm"
+        }
+      ],
+      "variables": {
+        "z_fine": {
+          "type": "parameter",
+          "units": "m",
+          "shape": ["lev"],
+          "default": [0.0, 65.57377049180327, 131.14754098360655, 196.72131147540983, 262.2950819672131, 327.86885245901635, 393.44262295081967, 459.0163934426229, 524.5901639344262, 590.1639344262295, 655.7377049180327, 721.311475409836, 786.8852459016393, 852.4590163934425, 918.0327868852459, 983.6065573770491, 1049.1803278688524, 1114.7540983606557, 1180.327868852459, 1245.901639344262, 1311.4754098360654, 1377.0491803278687, 1442.622950819672, 1508.1967213114754, 1573.7704918032787, 1639.3442622950818, 1704.918032786885, 1770.4918032786884, 1836.0655737704917, 1901.639344262295, 1967.2131147540981, 2032.7868852459014, 2098.3606557377047, 2163.934426229508, 2229.5081967213114, 2295.0819672131147, 2360.655737704918, 2426.2295081967213, 2491.803278688524, 2557.3770491803275, 2622.950819672131, 2688.524590163934, 2754.0983606557375, 2819.6721311475408, 2885.245901639344, 2950.8196721311474, 3016.3934426229507, 3081.967213114754, 3147.5409836065573, 3213.11475409836, 3278.6885245901635, 3344.262295081967, 3409.83606557377, 3475.4098360655735, 3540.983606557377, 3606.55737704918, 3672.1311475409834, 3737.7049180327867, 3803.27868852459, 3868.852459016393, 3934.4262295081962, 3999.9999999999995],
+          "description": "fine-grid level heights z = (k-1)*Lz/(Mz_fine-1), k = 1..62 with Lz = 4000 m (the columnSystemCtx fine grid; Mz_fine = 62 because ceil(Lz/min_dz)+1 = 62 for the 61-level storage grid -- the FP jitter in the min storage spacing makes 62, not 61). Level k is at index k."
+        },
+        "dz": {
+          "type": "parameter",
+          "units": "m",
+          "default": 65.57377049180327,
+          "description": "fine vertical grid spacing Lz/(Mz_fine-1) = 4000/61 m (columnSystemCtx::m_dz; also the min_dz-derived spacing that produces the 62-level fine grid)."
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "m",
+          "default": 58064.51612903226,
+          "description": "horizontal grid spacing 2*Lx/Mx = 2*900000/31 m (the test-F run of stage1/dumps/age)."
+        },
+        "dy": {
+          "type": "parameter",
+          "units": "m",
+          "default": 58064.51612903226,
+          "description": "horizontal grid spacing 2*Ly/My = 2*900000/31 m (the test-F run of stage1/dumps/age)."
+        },
+        "u3": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "fine-grid horizontal velocity x-component (coarse_to_fine interpolation of the test-F 3D velocity field; zero on the dome symmetry column)."
+        },
+        "v3": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "fine-grid horizontal velocity y-component (coarse_to_fine interpolation of the test-F 3D velocity field; zero on the dome symmetry column)."
+        },
+        "w3": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, -6.340585122983519e-12, -2.3636218767035538e-11, -4.994639994506149e-11, -8.366273515857812e-11, -1.2345382468000728e-10, -1.6821904880162516e-10, -2.170498509695664e-10, -2.6919733129366473e-10, -3.2404514768363686e-10, -3.8108687769942706e-10, -4.399071262904954e-10, -5.001657764933726e-10, -5.615848748918778e-10, -6.23937723804459e-10, -6.870398199495147e-10, -7.507413366265262e-10, -8.149208948333581e-10, -8.794804095750558e-10, -9.443408320604393e-10, -1.0094386375102376e-09, -1.0747229327472407e-09, -1.1401530783120177e-09, -1.2056967371471825e-09, -1.271328276427888e-09, -1.3370274613175055e-09, -1.4027783896608014e-09, -1.4685686252017312e-09, -1.5343884940910935e-09, -1.6002305154520832e-09, -1.6660889417864459e-09, -1.7319593891884267e-09, -1.7978385408214273e-09, -1.8637239100157343e-09, -1.9296136517596202e-09, -1.995506413360381e-09, -2.0614012167136338e-09, -2.127297365994928e-09, -2.1931943757248117e-09, -2.2590919150968263e-09, -2.3249897652307494e-09, -2.3908877866488474e-09, -2.4567858947941865e-09, -2.5226840418368824e-09, -2.5885822033627386e-09, -2.654480368822741e-09, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "fine-grid vertical velocity (coarse_to_fine interpolation of the test-F 3D velocity field; w = 0 at the bed and above the ice). Downward (negative) on the dome column, upward (positive) in the accumulation zones."
+        },
+        "ks": {
+          "type": "parameter",
+          "units": "1",
+          "default": 46.0,
+          "description": "fine-grid surface level index, 1-based (the C++ ColumnSystemCtx::init_column m_ks + 1): the top ice level, whose age is pinned to zero by the surface boundary condition. For the dome column (15,15) m_ks = 45."
+        },
+        "age_w": {
+          "type": "parameter",
+          "units": "s",
+          "shape": ["lev"],
+          "default": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "old-time ice age of the west horizontal neighbor column on the fine grid (the C++ m_A_w input of AgeColumnSystem::init; the explicit-at-old-time horizontal advection reads the neighbor ages at the START of the step). Zero in the test run, whose initial age field is identically zero."
+        },
+        "age_e": {
+          "type": "parameter",
+          "units": "s",
+          "shape": ["lev"],
+          "default": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "old-time ice age of the east horizontal neighbor column on the fine grid (the C++ m_A_e input of AgeColumnSystem::init). Zero in the test run."
+        },
+        "age_s": {
+          "type": "parameter",
+          "units": "s",
+          "shape": ["lev"],
+          "default": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "old-time ice age of the south horizontal neighbor column on the fine grid (the C++ m_A_s input of AgeColumnSystem::init). Zero in the test run."
+        },
+        "age_n": {
+          "type": "parameter",
+          "units": "s",
+          "shape": ["lev"],
+          "default": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+          "description": "old-time ice age of the north horizontal neighbor column on the fine grid (the C++ m_A_n input of AgeColumnSystem::init). Zero in the test run."
+        },
+        "tau": {
+          "type": "unknown",
+          "units": "s",
+          "shape": ["lev"],
+          "description": "ice age on the fine vertical grid (years converted to seconds; the C++ solution x[k] of the AgeColumnSystem tridiagonal solve)."
+        },
+        "hadv": {
+          "type": "unknown",
+          "units": "1",
+          "shape": ["lev"],
+          "description": "horizontal advection term u*d(tau)/dx + v*d(tau)/dy at each fine level, first-order upwind, evaluated at the old time from the neighbor-column ages (the C++ RHS horizontal contribution of AgeColumnSystem::solve; identically zero here because the neighbor ages and the initial field are zero)."
+        },
+        "age_storage": {
+          "type": "unknown",
+          "units": "s",
+          "shape": ["lev_s"],
+          "description": "ice age on the storage (dump) grid, the linear-in-level interpolation of the fine solution (AgeModel::fine_to_coarse; the dumped age_out column of stage1/dumps/age/columns.csv)."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "Initial condition: the ice starts at age zero everywhere (the test run's age.initial_value = 0 years).",
+          "lhs": {
+            "op": "ic",
+            "args": ["tau"]
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": 0.0
+          }
+        },
+        {
+          "_comment": "The age equation d(tau)/dt = 1 - hadv - w*d(tau)/dz with the AgeColumnSystem boundary conditions. Above the surface (i > ks) and at the surface cell (i == ks) the age stays zero (the C++ rows k > m_ks and the surface row m_ks, D = 1, RHS = 0). At the base cell (i == 1) a strictly upward bed velocity means ice is being added, so the age is pinned at zero (the C++ AA > 0 row 0); otherwise the base cell uses the interior equation with the downward upwind (the C++ AA <= 0 row 0), which reads the level above so no ghost level below the bed is touched. Interior cells 2..ks-1 carry the upwind vertical advection (implicit in the vertical in the C++ tridiagonal; here an ODE term integrated by the harness's stiff solver). The tau_up argument of age_vertical_advection at the base cell is passed as tau[1] (safe and unused, since the base cell never enters the interior branch with w > 0).",
+          "lhs": {
+            "op": "D",
+            "args": ["tau"],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                { "op": ">", "args": ["i", "ks"] },
+                0.0,
+                {
+                  "op": "ifelse",
+                  "args": [
+                    { "op": "==", "args": ["i", "ks"] },
+                    0.0,
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        { "op": "==", "args": ["i", 1] },
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            { "op": ">", "args": [{ "op": "index", "args": ["w3", 1] }, 0.0] },
+                            0.0,
+                            {
+                              "op": "-",
+                              "args": [
+                                { "op": "-", "args": [1.0, { "op": "index", "args": ["hadv", 1] }] },
+                                {
+                                  "op": "age_vertical_advection",
+                                  "args": [
+                                    { "op": "index", "args": ["tau", 1] },
+                                    { "op": "index", "args": ["tau", 1] },
+                                    { "op": "index", "args": ["tau", 2] },
+                                    { "op": "index", "args": ["w3", 1] }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            { "op": "-", "args": [1.0, { "op": "index", "args": ["hadv", "i"] }] },
+                            {
+                              "op": "age_vertical_advection",
+                              "args": [
+                                { "op": "index", "args": ["tau", "i"] },
+                                { "op": "index", "args": ["tau", { "op": "-", "args": ["i", 1] }] },
+                                { "op": "index", "args": ["tau", { "op": "+", "args": ["i", 1] }] },
+                                { "op": "index", "args": ["w3", "i"] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Horizontal advection u*d(tau)/dx + v*d(tau)/dy, first-order upwind, evaluated at the old time: the current column's age couples to the neighbor-column ages (age_w/e/s/n, old-time inputs), matching the C++ explicit-at-old-time horizontal term. In the test run the neighbors start at age zero, so hadv is identically zero and the dump's one-step horizontal contribution is reproduced exactly.",
+          "lhs": "hadv",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "age_horizontal_advection",
+              "args": [
+                { "op": "index", "args": ["tau", "i"] },
+                { "op": "index", "args": ["age_w", "i"] },
+                { "op": "index", "args": ["age_e", "i"] },
+                { "op": "index", "args": ["age_s", "i"] },
+                { "op": "index", "args": ["age_n", "i"] },
+                { "op": "index", "args": ["u3", "i"] },
+                { "op": "index", "args": ["v3", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Interpolation of the fine solution to the storage (dump) grid: storage level k sits between fine levels k and k+1 with the fixed weight w = (k-1)/60 of the upper level (AgeModel::fine_to_coarse; exact for linear profiles and verified against the dump grid); the top storage level 61 is fine level 62 itself (the ice-free top of the domain).",
+          "lhs": "age_storage",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["k"],
+            "ranges": { "k": { "from": "lev_s" } },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                { "op": "==", "args": ["k", 61] },
+                { "op": "index", "args": ["tau", 62] },
+                {
+                  "op": "age_storage_interpolate",
+                  "args": [
+                    { "op": "index", "args": ["tau", "k"] },
+                    { "op": "index", "args": ["tau", { "op": "+", "args": ["k", 1] }] },
+                    { "op": "/", "args": [{ "op": "-", "args": ["k", 1] }, 60.0] }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "dome_column_15_15",
+          "description": "One age step from age = 0 at the dome column (i,j) = (15,15) of the test-F run: H ~ 3000 m, fine-grid surface level ks = 46 (C++ m_ks = 45), purely vertical downward motion (u3 = v3 = 0). age_storage reproduces the dumped age_out (stage1/dumps/age/columns.csv) at the asserted storage levels: deep and mid ice (levels 2..43) agree to <= 1e-3 relative (measured <= 9e-5, with every level except 43 below 1e-5); the two storage levels just below the dome surface (levels 44, 45) show the largest exact-ODE-vs-BE scheme difference (4.4e-3 and 6.2e-3 relative) and are asserted at rel 1e-2; storage level 46 (the first above-ice level) is exactly zero, asserted at abs 1e-6 s. The expected literals are the dumped age_out values.",
+          "time_span": { "start": 0.0, "end": 315569259.747 },
+          "assertions": [
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 2 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 11 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 21 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 31 },
+              "expected": 315569259.74700004, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 39 },
+              "expected": 315569259.74653065, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 41 },
+              "expected": 315569255.5972825, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 43 },
+              "expected": 315536495.6177449, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 44 },
+              "expected": 312773394.5514172, "tolerance": { "rel": 1e-2 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 45 },
+              "expected": 83116390.65291995, "tolerance": { "rel": 1e-2 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 46 },
+              "expected": 0.0, "tolerance": { "abs": 1e-6 }
+            }
+          ]
+        },
+        {
+          "id": "mid_column_11_3",
+          "description": "One age step from age = 0 at the mid-radius column (i,j) = (11,3): H ~ 499.5 m, fine-grid surface level ks = 8 (C++ m_ks = 7), upward vertical motion (accumulation zone) with nonzero horizontal velocities u3, v3. The horizontal advection couples only to the (zero) neighbor-column ages, so hadv stays zero and the agreement with the dumped age_out (stage1/dumps/age/columns.csv) is the pure vertical-advection scheme difference, <= 1.5e-5 relative at every asserted level (rel 1e-3). Storage level 8 (first above-ice level) is exactly zero (abs 1e-6 s).",
+          "time_span": { "start": 0.0, "end": 315569259.747 },
+          "parameter_overrides": {
+            "ks": 8.0,
+            "u3": [-0.0, -6.595507426113949e-10, -1.0192514944693764e-09, -1.2006755276216202e-09, -1.2826126619019019e-09, -1.31392384949171e-09, -1.322986020702941e-09, -1.3245513213961955e-09, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "v3": [-0.0, -1.978652227834184e-09, -3.0577544834081287e-09, -3.6020265828648593e-09, -3.847837985705705e-09, -3.9417715484751296e-09, -3.968958062108822e-09, -3.9736539641885855e-09, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "w3": [0.0, 2.5536424954864997e-12, 9.513241998156825e-12, 1.982967706237101e-11, 3.245785315734151e-11, 4.6499484526799066e-11, 6.127167480430888e-11, 7.632698294462997e-11, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+          },
+          "assertions": [
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 2 },
+              "expected": 315569259.7469999, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 4 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 6 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 7 },
+              "expected": 284012333.77229995, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 8 },
+              "expected": 0.0, "tolerance": { "abs": 1e-6 }
+            }
+          ]
+        },
+        {
+          "id": "mid_column_6_11",
+          "description": "One age step from age = 0 at the mid-radius column (i,j) = (6,11): H ~ 1642.8 m, fine-grid surface level ks = 26 (C++ m_ks = 25), upward vertical motion with nonzero horizontal velocities u3, v3. The horizontal term couples only to the (zero) neighbor ages, so hadv stays zero and the agreement with the dumped age_out (stage1/dumps/age/columns.csv) is the pure vertical-advection scheme difference, <= 1.8e-4 relative at every asserted level (rel 1e-3). Storage level 26 (first above-ice level) is exactly zero (abs 1e-6 s).",
+          "time_span": { "start": 0.0, "end": 315569259.747 },
+          "parameter_overrides": {
+            "ks": 26.0,
+            "u3": [-0.0, -1.0742320319162654e-08, -1.9008576350495727e-08, -2.5335363153285952e-08, -3.0149414467294505e-08, -3.37889938862826e-08, -3.652129652502948e-08, -3.855657854088047e-08, -4.005960681449378e-08, -4.11589172713459e-08, -4.1954284211199854e-08, -4.252273165632186e-08, -4.292335866182727e-08, -4.320120168878671e-08, -4.339031679771907e-08, -4.3516231136587115e-08, -4.3597885771708045e-08, -4.3649169340221543e-08, -4.3680123454300795e-08, -4.3697885565429404e-08, -4.370742252402938e-08, -4.371209786543223e-08, -4.3714107519101833e-08, -4.37148118436222e-08, -4.371498636142267e-08, -4.3715009138519405e-08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "v3": [-0.0, -4.774364586294514e-09, -8.44825615577588e-09, -1.1260161401460427e-08, -1.3399739763242005e-08, -1.5017330616125606e-08, -1.623168734445755e-08, -1.713625712928021e-08, -1.7804269695330572e-08, -1.829285212059818e-08, -1.864634853831105e-08, -1.8898991847254165e-08, -1.9077048294145457e-08, -1.920053408390521e-08, -1.92845852434307e-08, -1.93405471718165e-08, -1.9376838120759135e-08, -1.9399630817876246e-08, -1.941338820191147e-08, -1.9421282473524187e-08, -1.9425521121790838e-08, -1.942759905130322e-08, -1.9428492230711934e-08, -1.9428805263832094e-08, -1.9428882827298972e-08, -1.9428892950453076e-08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "w3": [0.0, 8.791615341252986e-13, 3.3846021822579767e-12, 7.352555655029253e-12, 1.2613086627682889e-11, 1.8998959394010934e-11, 2.6351469165587978e-11, 3.452402017557446e-11, 4.338405844748396e-11, 5.28138271503999e-11, 6.271030182480763e-11, 7.298457567829985e-11, 8.35608969437489e-11, 9.437550717124374e-11, 1.0537538821795172e-10, 1.1651699412572947e-10, 1.2776502003492456e-10, 1.3909124216674034e-10, 1.504734494272467e-10, 1.6189447731391227e-10, 1.7334134772053392e-10, 1.8480451328818788e-10, 1.9627720162452819e-10, 2.0775485260744444e-10, 2.1923464078586428e-10, 2.3071507403632578e-10, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+          },
+          "assertions": [
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 2 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 13 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 21 },
+              "expected": 315569259.7469999, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 24 },
+              "expected": 315569259.747, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 25 },
+              "expected": 189341555.84819955, "tolerance": { "rel": 1e-3 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 26 },
+              "expected": 0.0, "tolerance": { "abs": 1e-6 }
+            }
+          ]
+        },
+        {
+          "id": "ice_free_column_0_0",
+          "description": "One age step at the ice-free column (i,j) = (0,0): H = 0, so the fine-grid surface level ks = 1 (C++ m_ks = 0) pins every level above (all of them) to age zero, and the ice-free dump column is reproduced exactly: age_storage = 0 at every storage level (abs 1e-6 s).",
+          "time_span": { "start": 0.0, "end": 315569259.747 },
+          "parameter_overrides": {
+            "ks": 1.0,
+            "u3": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "v3": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "w3": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+          },
+          "assertions": [
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 2 },
+              "expected": 0.0, "tolerance": { "abs": 1e-6 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 31 },
+              "expected": 0.0, "tolerance": { "abs": 1e-6 }
+            },
+            {
+              "variable": "age_storage", "time": 315569259.747, "coords": { "lev_s": 61 },
+              "expected": 0.0, "tolerance": { "abs": 1e-6 }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
