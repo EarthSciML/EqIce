@@ -229,8 +229,18 @@ whether the `.esm` reproduces or corrects it, and status.
    membrane balance div(4νH·grad u) = ρgH·h_x with the SSAFD face-stiffness
    discretization, Dirichlet inflow penalty row, and calving-front
    prescribed-flux row, relaxed pseudo-transiently to the steady state;
-   regressions: rheology 313/313 and SIA 48/48) → energy →
-   basal/hydrology → bed → surface/ocean/calving → subassemblies.
+   regressions: rheology 313/313 and SIA 48/48) → energy ✅
+   (`stage2/ice_energy.esm` + `stage2/energy_templates.esm`, 104/104 tests
+   passing under the interpreter compiler: EnthalpyModel column solve —
+   diffusion + vertical/horizontal advection + strain heating + surface
+   Dirichlet + basal heat flux + fine/coarse interpolation + basal melt rate —
+   on the test-F one-10-yr-step trace, plus the DrainageCalculator rate
+   curve) → age ✅ (`stage2/ice_age.esm` + `stage2/age_templates.esm`, 24/24
+   tests: AgeColumnSystem advection PDE with surface/basal-accumulation BCs
+   on the test-F one-step trace) → basal strength ✅
+   (`stage2/basal_resistance.esm` + `stage2/basal_templates.esm`, 160/160
+   tests at rel 1e-12: Mohr-Coulomb pointwise, yield-stress tauc map, three
+   drag laws) → hydrology → bed → surface/ocean/calving → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 

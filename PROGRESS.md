@@ -677,6 +677,85 @@ the coupled 31×31 3-D field are **deferred** (documented below).
   (only the rate curve is tested), and the coupled 31×31 3-D field with
   horizontal exchange; these are follow-up components/subassemblies.
 
+## Milestone 4 (continued) — Stage 2: PISM ice-age (AgeModel column) component authored and passing ✅
+
+The fifth Stage-2 deliverable: the PISM ice-age boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1 age
+dumps (`stage1/dumps/age/`, one dt = 315569259.747 s step from age = 0 of the
+test-F exact-solution velocity field). The scope is the **column solve** of
+`AgeColumnSystem`/`AgeModel` (age advection PDE, surface and basal-accumulation
+BCs, fine-grid storage interpolation). Coupling to real velocities
+(SIA/SSA), the full 3-D multi-column solve, the `AgeModel::update`
+negative-age clamp, and the ks-from-thickness computation are **deferred**
+(documentated in the component).
+
+- **Deliverable** ✅ — `stage2/ice_age.esm` (model AgeColumn: 62-level fine
+  grid `lev` (dz = Lz/61 = 65.5738 m — the C++ `ceil(Lz/min_dz)+1`
+  FP-jittered construction), 61-level storage grid `lev_s`, 15 vars, 4 eqs,
+  4 tests / 24 assertions) importing the shared math by reference from
+  `stage2/age_templates.esm` (`age_vertical_advection`,
+  `age_horizontal_advection`, `age_storage_interpolate`).
+- **Equations as math** ✅ — the age PDE written as
+  `D(tau, wrt:t) = 1 − hadv − w·dτ/dz`: first-order upwind advection,
+  implicit in the vertical (an ODE term integrated by the harness's stiff
+  solver, mirroring the C++ backward-Euler column step) and horizontal at old
+  time from neighbor-column age parameters (explicit in the C++); BCs:
+  above-surface and surface cells pinned to age 0, basal-accumulation pin
+  when `w3[1] > 0`, ice-free columns stay 0.
+- **Tests** ✅ — 24/24 passing under native BDF, SDIRK, and the interpreter
+  compiler. Measured agreement vs the dump (`stage1/dumps/age/columns.csv`):
+  deep/mid levels of the dome (15,15), (11,3) and (6,11) columns within
+  ≤9e-5–1.7e-4 relative (asserted rel 1e-3); the two near-surface dome levels
+  4.4e-3/6.2e-3 (asserted rel 1e-2); ice-free (0,0) exactly 0. The
+  exact-ODE-vs-dump gap is the difference between continuous ODE integration
+  and the C++ single backward-Euler step; the agent verified its transcription
+  of the C++ tridiagonal reproduces the dump to 1e-14–1e-16.
+- **Verification** ✅ — `validate`/`info`/`units --check` clean; full suite
+  571/571 native (rheology 313, sia 48, ssa 26, basal 160, age 24).
+- **C++ bugs** — none new (bugs.md #1–#6 unchanged); the 62-level fine grid
+  from storage-spacing FP jitter is a documented construction detail, not a
+  defect.
+
+## Milestone 4 (continued) — Stage 2: PISM basal-strength component authored and passing ✅
+
+The sixth Stage-2 deliverable: the PISM basal-strength boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1
+basal-strength dumps (`stage1/dumps/basal_strength/`: Mohr-Coulomb pointwise
+sample grids, three drag-law grids, and the tauc map on the test-F exact
+geometry). All functions are **D** (pointwise, instantaneous).
+`OptTillphiYieldStress` (inverse friction-angle optimization, **I**) and the
+SSA consumption of β into the SSA matrix (coupling) are **deferred**.
+
+- **Deliverable** ✅ — `stage2/basal_resistance.esm` (6 models:
+  `MohrCoulombPointwise` (effective_pressure / yield_stress /
+  till_friction_angle), `MohrCoulombYieldStress` (tauc map with the ice-free
+  high_tauc branch, P = ρ·g·H), `ConstantYieldStress`, and the three
+  `IceBasalResistance` drag laws — plastic (PISM's default SSA law),
+  pseudo-plastic, regularized — each its own model so the SSA component can
+  import the configured law by reference; 62 tests / 160 assertions) importing
+  the shared math by reference from `stage2/basal_templates.esm` (13
+  templates: effective pressure, yield stress / inverse friction angle,
+  overburden, basal speed machinery shared by all three drag laws).
+- **Equations as math** ✅ — Tulaczyk et al. 2000 effective pressure
+  `N_interior = N0·(δP/N0)^s·10^((e0/Cc)(1−s))`, `s = W/W_max`,
+  `N_till = min(P, N_interior)` (W_max = 2 m, N0 = 1000 Pa, e0 = 0.69,
+  Cc = 0.12, δ = 0.02); yield stress `tauc = c0 + tan(φ)·N_till` (c0 = 0) and
+  its exact inverse; the three drag laws with analytic `dbeta` (w.r.t.
+  α = 0.5|v|²), q = 0.25, u_th = 100 m/yr (converted with the UDUNITS
+  tropical year 3.15569259747e7 s — the key constant needed to reproduce the
+  dumps to full double precision), ε = 0.01 m/yr plastic regularization.
+- **Tests** ✅ — 160/160 passing at rel 1e-12 (bit-exact to dump precision):
+  φ→tauc→φ round-trips exact (20 → 20.000000000000004), effective-pressure
+  clamping knee, all three drag laws with `dbeta` cross-checked against the
+  dump's central-difference `dbeta_fd` column (rel err ~1e-10 in the dump),
+  and the tauc map at selected (i,j) cells. Non-finite dump rows
+  (`N_interior = inf` at δP = 0, W < 0; `phi_inverse = NaN` at N_till = 0)
+  reproduced and handled in the tests.
+- **Verification** ✅ — `validate`/`info`/`units --check` clean; full suite
+  571/571 native.
+- **C++ bugs** — none; no discrepancies found between any dumped value and
+  the C++ formulas (bugs.md #1–#6 unchanged).
+
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from
