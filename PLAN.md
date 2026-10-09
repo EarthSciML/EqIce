@@ -240,7 +240,14 @@ whether the `.esm` reproduces or corrects it, and status.
    on the test-F one-step trace) → basal strength ✅
    (`stage2/basal_resistance.esm` + `stage2/basal_templates.esm`, 160/160
    tests at rel 1e-12: Mohr-Coulomb pointwise, yield-stress tauc map, three
-   drag laws) → hydrology → bed → surface/ocean/calving → subassemblies.
+   drag laws) → bed ✅ (`stage2/bed_deformation.esm` +
+   `stage2/bed_templates.esm`, 346/346 tests at rel 1e-12: PointwiseIsostasy
+   two-interval trace with the load-accumulator time average; LingleClark
+   deferred) → surface/ocean ✅ (`stage2/surface_forcing.esm` +
+   `stage2/ocean_coupling.esm` + `stage2/surface_forcing_templates.esm`,
+   473/473 tests at rel 1e-12: PIK atmosphere/ocean/surface partition,
+   Constant ocean cross-check, water-column pressure, yearly cycle) →
+   hydrology (in progress) → calving → geometry → subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 

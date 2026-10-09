@@ -756,6 +756,93 @@ SSA consumption of β into the SSA matrix (coupling) are **deferred**.
 - **C++ bugs** — none; no discrepancies found between any dumped value and
   the C++ formulas (bugs.md #1–#6 unchanged).
 
+## Milestone 4 (continued) — Stage 2: PISM bed-deformation (PointwiseIsostasy) component authored and passing ✅
+
+The seventh Stage-2 deliverable: the PISM bed-deformation boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1 bed
+dumps (`stage1/dumps/bed/`, two full update intervals of
+`bed::PointwiseIsostasy`, `bed_deformation.model = "iso"`, on the test-F
+exact geometry). `Given`, `Null`, and `LingleClark`/`LingleClarkSerial`
+(Fourier spectral collocation) are **deferred**.
+
+- **Deliverable** ✅ — `stage2/bed_deformation.esm` (4 models:
+  `ComputeLoad`, `PointwiseIsostasyUpdate`, `BedDefLoadAccumulator`,
+  `PointwiseIsostasyTwoIntervals`; 131 tests / 346 assertions, all at
+  rel 1e-12) importing the shared math by reference from
+  `stage2/bed_templates.esm` (5 templates: isostatic compensation factor
+  f = ρ_ice/ρ_mantle, bed ocean depth, ocean load (ρ_w/ρ_i)·max(sea_level−bed,0),
+  ice load (floating ice excluded), isostatic bed update).
+- **Equations as math** ✅ — `bed_out = bed_in − f·(load − load_last)`,
+  `load_last ← load`, with `load_avg = (1/dt_beddef)·Σ load·dt` over the
+  update interval (the C++ accumulator divides by dt_beddef at the update
+  time); `init_impl` sets load_last to the initial load (H0), so interval 1
+  responds to a +150 m load change and interval 2 to +300 m.
+- **Tests** ✅ — all 120 `pointwise.csv` rows (compute_load + update_law)
+  asserted at rel 1e-12; the two-interval `columns.csv` trace at 7 cells
+  (dome, near-dome, mid-radius, near-margin, 3 ice-free) asserting
+  bed_out_1/2, uplift_1/2, load_last_1/2; the accumulator divide-by-dt_beddef
+  subtlety including the (5,7) cell where FP round-off shifts load_avg_1 by
+  ~6e-14 m (reproduced). A Python replication of the C++ FP chain reproduces
+  every dump value bit-exactly for all 517 ice cells; the .esm chain matches
+  to ~1e-15 rel (uplift within 1–2 ulp — C++ computes
+  (topg−topg_last)·(1/dt_beddef), the .esm divides).
+- **Harness note** — the event-based state-machine form (discrete events at
+  update times) is not usable in the inline-test pathway
+  (`UnsupportedConstruct` for `discrete_events`, esm-spec §9.6.6); the
+  accumulator + two-interval trace models cover the same semantics
+  (documented in the component).
+- **Verification** ✅ — `validate`/`info`/`units --check` clean (14/14
+  consistent); full native suite 1390/1390.
+- **C++ bugs** — none; `bed_analytic_1/2` equal `bed_out_1/2` in the dump
+  (self-consistent) (bugs.md #1–#6 unchanged).
+
+## Milestone 4 (continued) — Stage 2: PISM surface/ocean forcing components authored and passing ✅
+
+The eighth Stage-2 deliverable: the PISM coupler boundaries as hand-authored,
+compositional `.esm` components built from the Stage-1 surface/ocean traces
+(`stage1/dumps/surface_ocean/`, instantaneous-derivative type: PIK
+atmosphere, PIK + Constant ocean, PIK surface partition, water-column
+pressure, yearly-cycle time series). All required pieces are **D**
+(pointwise, instantaneous). The PDD surface model (**I**), Given/Uniform
+atmosphere and ocean models, Anomaly/Delta_* modifiers, ISMIP6/DEBM, PICO,
+GivenTH (Holland–Jenkins), ForceThickness, sea-level coupling, and
+frontal-melt physics are **deferred** (documented in the components).
+
+- **Deliverable** ✅ — `stage2/surface_forcing.esm` (AtmospherePIK,
+  SurfacePIK, SurfaceOceanCoupler per-cell wiring), `stage2/ocean_coupling.esm`
+  (OceanPIK, OceanConstant), and `stage2/surface_forcing_templates.esm`
+  (16 expression templates: martin mean-annual temperature, yearly cycle,
+  prescribed precipitation, shelf base temperature (pressure melting point,
+  shared PIK+Constant), Beckmann–Goosse freezing temperature, ocean-to-ice
+  heat flux, shelf base mass flux, water-column height/pressure, constant
+  ocean mass flux, SMB partition + mass-flux identity). 473/473 assertions
+  (OceanPIK 221, OceanConstant 6, AtmospherePIK 128, SurfacePIK 36,
+  SurfaceOceanCoupler 114), all at rel 1e-12.
+- **Equations as math** ✅ — `T_ma = 303.15 + 0.68775·lat − 0.0075·usurf`
+  (K), `T_ms = T_ma`, flat yearly cycle; `P(r) = 100·(2 + cos(πr/Lx))`
+  kg m⁻² yr⁻¹; `T_shelf = 273.15 − β_CC·ρ_i·g·H` (linear pressure melting
+  point, decreasing with depth); `z_b = −(ρ_i/ρ_w)·H`,
+  `T_f = 273.15 + 0.0939 − 0.057·S + 7.64e-4·z_b`,
+  `Q = melt_factor·ρ_w·c_p·γ_T·(T_ocean − T_f)`, `mf = Q/L`
+  (melt_factor 0.005, ρ_w 1028, c_p 3974, γ_T 1e-4, S 35, T_ocean −1.7 °C,
+  L 334000); `awcp = ½ρ_w·g·h_w²/H`; Constant ocean `mf = melt_rate·ρ_i`
+  (0.051914193590840291 m/yr). SMB partition: accumulation = max(smb,0),
+  melt = runoff = max(−smb,0), mass_flux = accumulation − runoff.
+- **Tests** ✅ — all pointwise CSVs (shelf_base_temperature 31 rows,
+  beckmann_goosse mass-flux chain 31×4, water_column_pressure 20×3,
+  atmosphere temperature/precipitation curves, surface partition) at
+  rel 1e-12; the per-cell `columns.csv` maps (incl. the `_const` Constant
+  ocean cross-check) with the analytic reference columns (T_ma_analytic,
+  T_shelf_analytic, mf_analytic, P_analytic) asserted to coincide (manager
+  re-verified: 961/961 cells each for T_ma and T_shelf).
+- **Verification** ✅ — `validate`/`info`/`units --check` clean (22+10
+  consistent); full native suite 1390/1390.
+- **C++ notes** — `ocean/ConstantPIK.cc` mass-flux comment is wrong
+  (already tracked as bugs.md #5; reproduced as positive = melting); the
+  mf map vs mf_analytic differ by ≤2 ULP at a few cells (expression order);
+  both PIK and Constant oceans produce nonzero mass flux in ice-free cells
+  (real C++ behavior, reproduced). No new bugs (bugs.md #1–#6 unchanged).
+
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from
