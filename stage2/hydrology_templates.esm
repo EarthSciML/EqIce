@@ -1,0 +1,180 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "hydrology_templates",
+    "description": "Expression-template library for the PISM subglacial-hydrology component (stage 2 of the eqice project): the Routing (Shreve) model q = -K grad psi with psi = P_over + rho_w g (b + W), discretized on the staggered (edge-centered) grid exactly as hydrology::Routing (Routing.cc, PISM v2.3.2). The library carries the pointwise flux law K = k W^(alpha-1) (Pi + eps^2)^((beta-2)/2) with eps = 1 for beta < 2 (compute_conductivity), the mask-aware edge averaging of the water thickness (water_thickness_staggered), the Mahaffy-like staggered gradient of the reduced potential R = P_over + rho_w g b that feeds Pi on the east/north edges, the edge velocity V = -K grad R with the Wstag > 0 zeroing (compute_velocity), the first-order-upwind advective flux Q = V W_upwind (advective_fluxes), the flow rate -div Q + div(D grad W) with D = rho_w g K Wstag evaluated at the edges (W_change_due_to_flow), the till-water projection rate dWtill/dt = clip(input - C, 0, tillwat_max) in the continuous (projected-ODE) limit of update_Wtill's per-substep clip, and the mask-weighted staggered-to-regular flux averaging (staggered_to_regular). Free names in template bodies (the grid spacings dx, dy and the config parameters k_cond, alpha, beta, C_decay, tillwat_max) resolve against the importing model's declared parameters (esm-spec 9.6.1), following the consumer-supplied-geometry contract of the EarthSciDiscretizations rules; a future EarthSciDiscretizations PR can lift the staggered stencils into proper D-operator rules on a uniform Cartesian grid. Reference implementation: PISM v2.3.2 stage1/pism/src/hydrology/Routing.cc (water_thickness_staggered, compute_conductivity, compute_velocity, advective_fluxes, W_change_due_to_flow, update_Wtill, update_W) and util/array/Staggered.cc (staggered_to_regular)."
+  },
+  "expression_templates": {
+    "routing_water_thickness_east": {
+      "description": "Mask-aware water thickness at the EAST edge of cell (i,j) (the face between (i,j) and (i+1,j)), exactly the include_floating_ice = false branch of Routing::water_thickness_staggered: if the current cell is grounded the value is the mean of the two cells when the east neighbor is grounded and the current cell's W otherwise; if the current cell is not grounded the value is the east neighbor's W when that is grounded and 0 otherwise. gc/ge are 1/0 grounded flags of the current and east cells; the consumer computes them from the ice thickness (grounded = H > 0.01 m, the geometry.ice_free_thickness_standard default) with out-of-domain reads resolving to 0.",
+      "params": ["Wc", "We", "gc", "ge"],
+      "match": { "op": "routing_water_thickness_east", "args": ["Wc", "We", "gc", "ge"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          "gc",
+          { "op": "ifelse", "args": ["ge", { "op": "*", "args": [0.5, { "op": "+", "args": ["Wc", "We"] }] }, "Wc"] },
+          { "op": "ifelse", "args": ["ge", "We", 0.0] }
+        ]
+      }
+    },
+    "routing_water_thickness_north": {
+      "description": "Mask-aware water thickness at the NORTH edge of cell (i,j) (the face between (i,j) and (i,j+1)), exactly the include_floating_ice = false branch of Routing::water_thickness_staggered, with the east-neighbor logic transposed to the north neighbor.",
+      "params": ["Wc", "Wn", "gc", "gn"],
+      "match": { "op": "routing_water_thickness_north", "args": ["Wc", "Wn", "gc", "gn"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          "gc",
+          { "op": "ifelse", "args": ["gn", { "op": "*", "args": [0.5, { "op": "+", "args": ["Wc", "Wn"] }] }, "Wc"] },
+          { "op": "ifelse", "args": ["gn", "Wn", 0.0] }
+        ]
+      }
+    },
+    "routing_Pi_east": {
+      "description": "Squared gradient magnitude Pi = |grad R|^2 of the reduced potential R = P_over + rho_w g b at the EAST edge of cell (i,j), the Mahaffy-like staggered scheme of Routing::compute_conductivity (east-edge branch): dRdx = (R(i+1,j) - R(i,j))/dx and dRdy = (R(i+1,j+1) + R(i,j+1) - R(i+1,j-1) - R(i,j-1))/(4 dy), Pi = dRdx^2 + dRdy^2. The consumer supplies the six cell values (Rc = R(i,j), Re = R(i+1,j), Rn = R(i,j+1), Rne = R(i+1,j+1), Rs = R(i,j-1), Rse = R(i+1,j-1)); dx and dy resolve as free names against the consumer's grid-spacing parameters.",
+      "params": ["Rc", "Re", "Rn", "Rne", "Rs", "Rse"],
+      "match": { "op": "routing_Pi_east", "args": ["Rc", "Re", "Rn", "Rne", "Rs", "Rse"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "^", "args": [{ "op": "/", "args": [{ "op": "-", "args": ["Re", "Rc"] }, "dx"] }, 2] },
+          { "op": "^", "args": [{ "op": "/", "args": [{ "op": "-", "args": [{ "op": "+", "args": ["Rne", "Rn"] }, { "op": "+", "args": ["Rse", "Rs"] }] }, { "op": "*", "args": [4, "dy"] }] }, 2] }
+        ]
+      }
+    },
+    "routing_Pi_north": {
+      "description": "Squared gradient magnitude Pi = |grad R|^2 at the NORTH edge of cell (i,j), the north-edge branch of Routing::compute_conductivity: dRdx = (R(i+1,j+1) + R(i+1,j) - R(i-1,j+1) - R(i-1,j))/(4 dx) and dRdy = (R(i,j+1) - R(i,j))/dy, Pi = dRdx^2 + dRdy^2. The consumer supplies the six cell values (Rc = R(i,j), Rn = R(i,j+1), Re = R(i+1,j), Rne = R(i+1,j+1), Rw = R(i-1,j), Rnw = R(i-1,j+1)).",
+      "params": ["Rc", "Rn", "Re", "Rne", "Rw", "Rnw"],
+      "match": { "op": "routing_Pi_north", "args": ["Rc", "Rn", "Re", "Rne", "Rw", "Rnw"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "^", "args": [{ "op": "/", "args": [{ "op": "-", "args": [{ "op": "+", "args": ["Rne", "Re"] }, { "op": "+", "args": ["Rnw", "Rw"] }] }, { "op": "*", "args": [4, "dx"] }] }, 2] },
+          { "op": "^", "args": [{ "op": "/", "args": [{ "op": "-", "args": ["Rn", "Rc"] }, "dy"] }, 2] }
+        ]
+      }
+    },
+    "routing_conductivity": {
+      "description": "The nonlinear conductivity K = k Wstag^(alpha-1) (Pi + eps^2)^((beta-2)/2) of Routing::compute_conductivity, evaluated at one edge from the edge water thickness Wstag, the squared reduced-potential gradient Pi, and the regularization eps (1 for beta < 2, 0 otherwise; the C++ 'eps' of compute_conductivity). k_cond, alpha, beta resolve as free names against the consumer's parameters (hydrology.hydraulic_conductivity, thickness_power_in_flux, gradient_power_in_flux).",
+      "params": ["Ws", "Pi", "eps"],
+      "match": { "op": "routing_conductivity", "args": ["Ws", "Pi", "eps"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "k_cond",
+          { "op": "^", "args": ["Ws", { "op": "-", "args": ["alpha", 1] }] },
+          { "op": "^", "args": [{ "op": "+", "args": ["Pi", { "op": "^", "args": ["eps", 2] }] }, { "op": "/", "args": [{ "op": "-", "args": ["beta", 2] }, 2] }] }
+        ]
+      }
+    },
+    "routing_velocity": {
+      "description": "The edge water velocity V = -K grad R of Routing::compute_velocity: the reduced-potential gradient component Rgrad at the edge (P_x + rho_w g b_x for the east edge, P_y + rho_w g b_y for the north) times -K, zeroed when the edge water thickness is zero (the C++ 'if (W(i,j,o) > 0.0)' guard, which keeps the reported V correct in the CFL calculation and, here, keeps the fractional power in the conductivity away from a negative water thickness).",
+      "params": ["Ws", "K", "Rgrad"],
+      "match": { "op": "routing_velocity", "args": ["Ws", "K", "Rgrad"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": ["Ws", 0.0] },
+          { "op": "*", "args": [-1.0, "K", "Rgrad"] },
+          0.0
+        ]
+      }
+    },
+    "routing_upwind_flux": {
+      "description": "The first-order-upwind advective edge flux Q = V W_upwind of Routing::advective_fluxes: Q = V * Wc when V >= 0 (upwind cell is the current cell) and Q = V * Wu otherwise (upwind cell is the east/north neighbor), matching the C++ ternary V >= 0.0 ? W(i,j) : W(i+1,j) (resp. W(i,j+1)).",
+      "params": ["V", "Wc", "Wu"],
+      "match": { "op": "routing_upwind_flux", "args": ["V", "Wc", "Wu"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "V",
+          { "op": "ifelse", "args": [{ "op": ">=", "args": ["V", 0.0] }, "Wc", "Wu"] }
+        ]
+      }
+    },
+    "routing_flow": {
+      "description": "The water-thickness flow rate of Routing::W_change_due_to_flow, -div Q + div(D grad W) with the edge diffusion coefficients D_e = rho_w g K_e Wstag_e supplied as De/Dw/Dn/Ds: -[ (Qe - Qw)/dx + (Qn - Qs)/dy ] + (1/dx^2)(De (We - Wc) - Dw (Wc - Ww)) + (1/dy^2)(Dn (Wn - Wc) - Ds (Wc - Ws)), where Qe/Qw/Qn/Qs are the east/west/north/south edge advective fluxes of the cell and We/Ww/Wn/Ws/Wc the cell-centered water thicknesses. dx, dy resolve as free names.",
+      "params": ["Qe", "Qw", "Qn", "Qs", "De", "Dw", "Dn", "Ds", "We", "Ww", "Wn", "Ws", "Wc"],
+      "match": { "op": "routing_flow", "args": ["Qe", "Qw", "Qn", "Qs", "De", "Dw", "Dn", "Ds", "We", "Ww", "Wn", "Ws", "Wc"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "*", "args": [-1.0, { "op": "+", "args": [{ "op": "/", "args": [{ "op": "-", "args": ["Qe", "Qw"] }, "dx"] }, { "op": "/", "args": [{ "op": "-", "args": ["Qn", "Qs"] }, "dy"] }] }] },
+          { "op": "+", "args": [
+            { "op": "*", "args": [{ "op": "/", "args": [1, { "op": "^", "args": ["dx", 2] }] }, { "op": "-", "args": [{ "op": "*", "args": ["De", { "op": "-", "args": ["We", "Wc"] }] }, { "op": "*", "args": ["Dw", { "op": "-", "args": ["Wc", "Ww"] }] }] }] },
+            { "op": "*", "args": [{ "op": "/", "args": [1, { "op": "^", "args": ["dy", 2] }] }, { "op": "-", "args": [{ "op": "*", "args": ["Dn", { "op": "-", "args": ["Wn", "Wc"] }] }, { "op": "*", "args": ["Ds", { "op": "-", "args": ["Wc", "Ws"] }] }] }] }
+          ] }
+        ]
+      }
+    },
+    "routing_till_rate": {
+      "description": "The projected till-storage rate dWtill/dt = clip(input - C, 0, tillwat_max) in the continuous limit of Routing::update_Wtill's per-substep clip (input = surface + basal water input, C = hydrology.tillwat_decay_rate): the rate is input - C inside the open interval (0, tillwat_max), pinned to 0 at the lower bound when the input is below the decay rate and at the upper bound when it exceeds it. In the test run the till stays well below tillwat_max, so the upper projection is inactive; the lower projection keeps the till at 0 in ice-free cells (input = 0). C_decay, tillwat_max resolve as free names.",
+      "params": ["Wtill", "input_rate"],
+      "match": { "op": "routing_till_rate", "args": ["Wtill", "input_rate"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "and", "args": [{ "op": ">=", "args": ["Wtill", "tillwat_max"] }, { "op": ">", "args": ["input_rate", "C_decay"] }] },
+          0.0,
+          { "op": "ifelse", "args": [
+            { "op": "and", "args": [{ "op": "<=", "args": ["Wtill", 0.0] }, { "op": "<", "args": ["input_rate", "C_decay"] }] },
+            0.0,
+            { "op": "-", "args": ["input_rate", "C_decay"] }
+          ] }
+        ]
+      }
+    },
+    "routing_staggered_to_regular_u": {
+      "description": "The u-component of the staggered-to-regular flux mapping of util/array/Staggered.cc (staggered_to_regular, array::Vector form): u(i,j) = (ge Qe + gw Qw)/(ge + gw) where Qe/Qw are the east and west edge fluxes of cell (i,j) and ge/gw their grounded flags (1/0), and u = 0 when neither neighbor cell is grounded (the C++ 'if (e + w > 0)' branch).",
+      "params": ["ge", "gw", "Qe", "Qw"],
+      "match": { "op": "routing_staggered_to_regular_u", "args": ["ge", "gw", "Qe", "Qw"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": [{ "op": "+", "args": ["ge", "gw"] }, 0] },
+          { "op": "/", "args": [{ "op": "+", "args": [{ "op": "*", "args": ["ge", "Qe"] }, { "op": "*", "args": ["gw", "Qw"] }] }, { "op": "+", "args": ["ge", "gw"] }] },
+          0.0
+        ]
+      }
+    },
+    "routing_staggered_to_regular_v": {
+      "description": "The v-component of the staggered-to-regular flux mapping: v(i,j) = (gn Qn + gs Qs)/(gn + gs) with Qn/Qs the north and south edge fluxes and gn/gs their grounded flags, 0 when neither neighbor is grounded.",
+      "params": ["gn", "gs", "Qn", "Qs"],
+      "match": { "op": "routing_staggered_to_regular_v", "args": ["gn", "gs", "Qn", "Qs"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": [{ "op": "+", "args": ["gn", "gs"] }, 0] },
+          { "op": "/", "args": [{ "op": "+", "args": [{ "op": "*", "args": ["gn", "Qn"] }, { "op": "*", "args": ["gs", "Qs"] }] }, { "op": "+", "args": ["gn", "gs"] }] },
+          0.0
+        ]
+      }
+    },
+    "routing_flux_law_K": {
+      "description": "The pointwise Routing flux law K = k W^(alpha-1) (G^2 + eps^2)^((beta-2)/2) with G = |grad R| and eps = 1 for beta < 2 (the regularization of compute_conductivity), exactly the analytic target sampled by stage1/dumps/hydrology/flux_law.csv. k_cond, alpha, beta resolve as free names.",
+      "params": ["W", "G"],
+      "match": { "op": "routing_flux_law_K", "args": ["W", "G"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "k_cond",
+          { "op": "^", "args": ["W", { "op": "-", "args": ["alpha", 1] }] },
+          { "op": "^", "args": [
+            { "op": "+", "args": [
+              { "op": "^", "args": ["G", 2] },
+              { "op": "^", "args": [{ "op": "ifelse", "args": [{ "op": "<", "args": ["beta", 2] }, 1.0, 0.0] }, 2] }
+            ] },
+            { "op": "/", "args": [{ "op": "-", "args": ["beta", 2] }, 2] }
+          ] }
+        ]
+      }
+    },
+    "routing_flux_law_qmag": {
+      "description": "The advective flux magnitude of the continuous law q = -K W grad R: |q| = K W G, the q_mag column of stage1/dumps/hydrology/flux_law.csv.",
+      "params": ["K", "W", "G"],
+      "match": { "op": "routing_flux_law_qmag", "args": ["K", "W", "G"] },
+      "body": { "op": "*", "args": ["K", "W", "G"] }
+    }
+  }
+}
