@@ -879,6 +879,13 @@ dome-centered water blob). `Distributed`, `NullTransport`, and
 - **Verification** ✅ — `validate`/`info`/`units --check` clean; full native
   suite 3167/3167.
 - **C++ bugs** — none new (bugs.md #1–#6 unchanged).
+- **Suite note** — the worker's follow-up commit (7210cba, made after the
+  merge) trimmed the suite to 316 assertions by removing the
+  `staggered_operators_last_substep` test; main keeps the 356-assertion
+  version, verified green under native and SDIRK (the interpreter compiler
+  times out on this large suite — a harness slowness, not a failure). The
+  removed test pins the staggered operators at the last-substep state via
+  the `initial_conditions` seeding machinery.
 
 ## Milestone 4 (continued) — Stage 2: PISM calving/front-retreat component authored and passing ✅
 
