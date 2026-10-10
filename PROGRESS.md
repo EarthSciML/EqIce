@@ -977,6 +977,36 @@ With this commit, **all 12 Stage-2 leaf components are authored and passing**
 - **Verification** ✅ — `validate`/`info`/`units --check` clean; full
   native suite 3248/3248.
 
+## Milestone 4 (continued) — Stage 2: subassembly phase launched (3 workers in flight)
+
+With all 12 leaf components merged (full native suite 3248/3248 + energy 104
+under interpreter, HEAD `a8d5318`), the subassembly phase is underway. The
+manager probed the harness's composition machinery first: top-level
+`models.<k>` `{ref}` mounts with a `model` selector and `variable_map`
+`coupling` entries validate and load in the `esm` CLI (probe mounting
+`sia.esm`'s `SIA3DHorizontalVelocity` + `{"type": "variable_map", "from":
+"SIA.u3", ...}` passed; coupling entry types per spec §10:
+`operator_compose` / `couple` / `variable_map`). Three workers dispatched in
+parallel worktrees:
+
+1. **stress_balance subassembly** (`wt-sb`) — `stage2/stress_balance.esm`:
+   mounts the SIA and SSA components by reference, couples their outputs, and
+   implements the shared StressBalance D-methods (volumetric strain heating
+   Σ, vertical velocity w(z), basal frictional heating F_b) with
+   scenario-based tests vs the sia/ssa dumps. First true cross-component
+   assembly; mounted tests are dropped at the mount (normative), so it
+   authors its own tests. Open question being resolved empirically: can
+   `esm test` run a coupled document?
+2. **Energy 3-D coupled field** (`wt-energy3d`) — completes the deferred
+   full-field 31×31×61 enthalpy solve with horizontal exchange, built on the
+   single-column EnthalpyColumn.
+3. **Age 3-D multi-column solve** (`wt-age3d`) — completes the deferred
+   full-field age solve with horizontal exchange, built on the single-column
+   AgeColumn.
+
+Next after these: top-level `eqice.esm` (Stage 3) needs full-model C++
+simulations with component-boundary dumps (new instrumentation; PLAN.md §6).
+
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from
