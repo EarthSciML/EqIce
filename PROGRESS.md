@@ -843,6 +843,88 @@ frontal-melt physics are **deferred** (documented in the components).
   both PIK and Constant oceans produce nonzero mass flux in ice-free cells
   (real C++ behavior, reproduced). No new bugs (bugs.md #1–#6 unchanged).
 
+## Milestone 4 (continued) — Stage 2: PISM hydrology (Routing/Shreve) component authored and passing ✅
+
+The ninth Stage-2 deliverable: the PISM subglacial-hydrology boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1
+hydrology traces (`stage1/dumps/hydrology/`, ONE 0.25-yr update step of
+`hydrology::Routing`, Shreve q = −K∇ψ, on the test-F exact geometry with the
+dome-centered water blob). `Distributed`, `NullTransport`, and
+`SteadyState`/`EmptyingProblem` are **deferred**.
+
+- **Deliverable** ✅ — `stage2/hydrology.esm` (the Routing/Shreve model as a
+  continuous PDE over the 31×31 field; 356 assertions) importing the shared
+  math by reference from `stage2/hydrology_templates.esm` (180 lines), with
+  test-generation tooling committed under `stage2/tools/`
+  (`build_hydrology_tests.py`, `fill_hydrology_data.py`, and
+  `instrument_hydrology_substeps.cc` — a Stage-2 analysis driver that
+  replicates `Routing::update_impl`'s internal substep loop with dump hooks,
+  self-validated bit-for-bit against the Stage-1 dump, exposing the
+  per-substep trajectory the one-step Stage-1 dump cannot show).
+- **Equations as math** ✅ — the Shreve flux law q = −K∇ψ with the
+  conductivity/flux law K(W) and the W / W_till storage split, forced and
+  initialized exactly as in the dump (W = 0.5·exp(−(r/150 km)²) blob,
+  dry till, surface input 0.2 m/yr we, basal melt blob 0.1 m/yr). No `ic`
+  equations: the native compiler's build-time initial-condition scope cannot
+  evaluate observed definitions that read the state (the same harness quirk
+  documented in ssa.esm); the initial state is declared as unknown defaults.
+- **Tests** ✅ — 356/356 on the native compiler: the staggered edge operators
+  (Wstag/Kstag/Vstag/Qstag) at t = 0 and at the last-substep state vs
+  `staggered.csv`; the initial state (W blob, dry till, overburden) exact;
+  the flux law at all 99 `flux_law.csv` samples (rel 1e-12); the one-step
+  evolution (W_out, W_till_out, time-averaged flux, P_over) at documented
+  Euler-vs-ODE scheme-gap tolerances: W/flux rel 0.05 (measured max 4.4% —
+  the C++ takes one discrete backward-Euler-ish substep, the .esm integrates
+  the continuous PDE), W_till rel 1e-6, overburden rel 1e-12.
+- **Verification** ✅ — `validate`/`info`/`units --check` clean; full native
+  suite 3167/3167.
+- **C++ bugs** — none new (bugs.md #1–#6 unchanged).
+
+## Milestone 4 (continued) — Stage 2: PISM calving/front-retreat component authored and passing ✅
+
+The tenth Stage-2 deliverable: the PISM calving / front-retreat boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1 calving
+traces (`stage1/dumps/calving/`, on the van der Veen CFBC shelf state, square
+65×65 grid). PrescribedRetreat (**I**), DischargeGiven/DischargeRouting
+frontal melt, FrontRetreat::update_geometry part-grid, and the
+`icemodel/frontretreat.cc` orchestration are **deferred** (documented).
+
+- **Deliverable** ✅ — `stage2/calving.esm` (8 models: PrincipalStrainRates,
+  EigenCalving, vonMisesCalving, HayhurstCalving, CalvingAtThickness,
+  FloatKill, FrontalMeltUndercutting, FrontalMeltISMIP6, ConstantFrontalMelt;
+  812 tests / 1421 assertions — 72 hand-authored + 1349 dump-derived)
+  importing the shared math by reference from `stage2/calving_templates.esm`
+  (17 expression templates).
+- **Equations as math** ✅ — verified against the dumps at rel 0
+  (bit-exact): eigen-calving rate = K·eigen1_avg·eigen2_avg at ice-free-ocean
+  cells next to floating ice (K = 3e16 m·s), with the principal strain rates
+  from the centered-difference reduction of
+  `compute_2D_principal_strain_rates`; von Mises: e_s, σ̃ = √3·B·e_s^(1/n),
+  rate = |v|_avg·σ̃/σ_max (B = 1.9e8 Pa s^(1/3), n = 3, σ_max = 1e6 Pa);
+  Hayhurst: B̃·(1e-6)^r/yr·(1−ω^2.8)·(σ₀−σ_th)^r·H_eff with the floating
+  H_eff adjustment (B̃ = 65, r = 0.43, σ_th = 170 kPa); CalvingAtThickness
+  (H < 300 m at the front) and FloatKill in-place removal; the
+  FrontalMeltPhysics kernels q_m = (A·h·q_sg^α + B)·TF^β (full 294/210-row
+  grids); ConstantFrontalMelt (1 m/day melt, retreat 0.8852 m/day with
+  include_floating_ice, H_submerged = (ρ_i/ρ_w)·H_threshold for floating
+  fronts).
+- **Tests** ✅ — 1421/1421 on the native compiler; every law asserted on
+  both its branches (zero and nonzero rates; both include_floating_ice
+  settings). Unit-checker m/yr and m/day conversions handled by declaring
+  `seconds_per_year` (s/yr) and `seconds_per_day` (s/day).
+- **Dump findings** (documented in the component) — the Hayhurst
+  `sigma_0_Pa` dump column is the instrument's reconstruction with the
+  *unadjusted* H (it does not equal the component's internal σ₀; the rate,
+  which matches exactly, uses the H_eff-based σ₀); the (64,·) ghost column is
+  a periodic copy of column 0 (excluded from tests). No C++ bugs
+  (bugs.md #1–#6 unchanged).
+- **Verification** ✅ — `validate`/`info`/`units --check` clean; full native
+  suite 3167/3167.
+- **Deferred (documented)** — front-cell sampling averages (+/−2-cell
+  stencil), the part-grid threshold-thickness stencil, next-to-* mask
+  properties, Hayhurst ice-free-cell neighbor propagation, margin one-sided
+  strain-rate stencils.
+
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from

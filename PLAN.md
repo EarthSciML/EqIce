@@ -247,7 +247,14 @@ whether the `.esm` reproduces or corrects it, and status.
    `stage2/ocean_coupling.esm` + `stage2/surface_forcing_templates.esm`,
    473/473 tests at rel 1e-12: PIK atmosphere/ocean/surface partition,
    Constant ocean cross-check, water-column pressure, yearly cycle) →
-   hydrology (in progress) → calving → geometry → subassemblies.
+   hydrology ✅ (`stage2/hydrology.esm` + `stage2/hydrology_templates.esm` +
+   `stage2/tools/`, 356/356 tests: Routing/Shreve continuous PDE, staggered
+   operators, flux law @ rel 1e-12, one-step evolution at documented
+   Euler-vs-ODE tolerances) → calving ✅ (`stage2/calving.esm` +
+   `stage2/calving_templates.esm`, 1421/1421 tests @ rel 0: EigenCalving,
+   vonMises, Hayhurst, CalvingAtThickness, FloatKill, FrontalMeltPhysics
+   kernels, Constant frontal melt) → geometry (in progress) →
+   subassemblies.
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 
