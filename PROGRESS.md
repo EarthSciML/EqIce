@@ -932,6 +932,51 @@ frontal melt, FrontRetreat::update_geometry part-grid, and the
   properties, Hayhurst ice-free-cell neighbor propagation, margin one-sided
   strain-rate stencils.
 
+## Milestone 4 (continued) — Stage 2: PISM geometry (mass continuity) component authored and passing ✅
+
+The eleventh Stage-2 deliverable: the PISM geometry boundary as a
+hand-authored, compositional `.esm` component built from the Stage-1
+geometry traces (`stage1/dumps/geometry/`, ONE dt = 1 yr step each of
+`GeometryEvolution::flow_step` and `source_term_step` from the same test-F
+exact geometry, plus the `part_grid_threshold_thickness` pointwise sample).
+With this commit, **all 12 Stage-2 leaf components are authored and passing**
+(see PLAN.md §10.4); the next phase is the subassemblies.
+
+- **Deliverable** ✅ — `stage2/geometry.esm` (3 models: flow_step,
+  source_term_step, part-grid threshold; 81 assertions — 27 flow, 32
+  source, 22 part-grid) importing the shared math by reference from
+  `stage2/geometry_templates.esm` (347 lines: face-flux construction, mask
+  limiter, divergence rules, effective_change, cell mask/surface,
+  part_grid_threshold_thickness).
+- **Equations as math** ✅ — `flow_step` as the mass-continuity PDE
+  dH/dt = −div(Q) with mask-limited diffusive + upwind advective face fluxes
+  and the staggered finite-volume divergence on the zero-flux closed domain
+  (the outermost ring is ice-free so sum(div Q) telescopes to 0 — reproduced:
+  conservation integral residual −3.3e-12 m); `source_term_step` as the
+  pointwise effective-change map with non-negativity clamping
+  (dH_SMB = dt·smb/ρ_ice, dH_BMB = −dt·bmr); `part_grid_threshold_thickness`
+  pointwise (22 cases, machine-exact rel 1e-12).
+- **Tests** ✅ — 81/81 on the native compiler: flow assertions at
+  dome/margin/ice-free cells carry the measured forward-Euler-vs-exact-ODE
+  scheme gap (H/surface rel ≤5e-6, dH_flow rel ≤3e-4, documented); the
+  closed-domain mass-balance integral and non-negativity min(H) also
+  asserted; the algebraic source step and the part-grid thresholds are
+  machine-exact (rel 1e-12).
+- **Harness finding (worth an upstream EarthSciAST issue)** — the `ic`
+  equation had to be dropped: for ANY multi-model document the inline-test
+  build path (`ArrayCompiled::from_flattened`) cannot resolve a
+  scoped-reference `ic` whose RHS is a document-inline array (the flattener
+  routes `ic` equations into `flat.field_ics`, so the resolver sees no `ic`
+  in the synthetic model). Single-model docs and provider-loaded fields
+  work. Fix: the initial profile is declared as an inline-array `default`
+  (spec-sanctioned, `StateDefault::Field`). Recommended compiler fix (small):
+  in `from_flattened`, append `flat.field_ics` as `ic`-LHS equations before
+  `from_model`. This matters for the subassembly phase (coupled models).
+- **C++ bugs** — none found in `GeometryEvolution.cc` (bugs.md #1–#6
+  unchanged).
+- **Verification** ✅ — `validate`/`info`/`units --check` clean; full
+  native suite 3248/3248.
+
 ## Stage 2 — Stubs → physics → EarthSciModels PRs (in progress)
 
 Per PLAN.md §5: hand-author stub `.esm` files with `tests` blocks from

@@ -253,8 +253,14 @@ whether the `.esm` reproduces or corrects it, and status.
    Euler-vs-ODE tolerances) → calving ✅ (`stage2/calving.esm` +
    `stage2/calving_templates.esm`, 1421/1421 tests @ rel 0: EigenCalving,
    vonMises, Hayhurst, CalvingAtThickness, FloatKill, FrontalMeltPhysics
-   kernels, Constant frontal melt) → geometry (in progress) →
-   subassemblies.
+   kernels, Constant frontal melt) → geometry ✅ (`stage2/geometry.esm` +
+   `stage2/geometry_templates.esm`, 81/81 tests: flow_step PDE with
+   mask-limited face fluxes + closed-domain conservation integral,
+   source_term_step with clamping, part-grid thresholds @ rel 1e-12) — all
+   12 leaf components done (full native suite 3248/3248 + energy 104 under
+   interpreter) → subassemblies (in progress: stress_balance.esm mounting
+   SIA+SSA by ref with the shared D methods; completing the deferred 3-D
+   coupled energy/age solves; harness mount+coupling verified by probe).
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 
