@@ -1,0 +1,290 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "calving_templates",
+    "description": "Expression-template library for the PISM calving and frontal-melt components (stage 2 of the eqice project). Carries the pointwise rate laws (EigenCalving rate = K * eigen1 * (eigen2 - 0) with the compressive/extensive branch; the von Mises effective tensile strain rate e_s = sqrt(0.5*(max(0,eigen1)^2 + max(0,eigen2)^2)) and sigma_tilde = sqrt(3)*B*e_s^(1/n); the Hayhurst rate B_tilde*(1e-6)^r/yr * (1 - omega^2.8) * (sigma_0 - sigma_threshold)^r * H_eff with the floating-shelf thickness adjustment H_eff = water_depth + (1 - rho_i/rho_w)*H and the sigma_0 tensile-stress approximation), the principal-strain-rate invariants eigen1 = A + q, eigen2 = A - q with A = 0.5*(u_x + v_y), q = sqrt((0.5*(u_x - v_y))^2 + (0.5*(v_x + u_y))^2) (the closed-form reduction of stressbalance::compute_2D_principal_strain_rates; the finite-difference gradients with the one-sided margin handling are part of the deferred subassembly coupling), the flotation criterion (h_f = (sea_level - bed) * rho_w/rho_i; the is_floating test H < h_f used by the frontal-melt retreat-rate H_submerged and documented for FloatKill), and the two FrontalMeltPhysics kernels q_m = (A*h*q_sg^alpha + B)*TF^beta (undercutting with the h/q_sg/TF nonnegativity clamps, ISMIP6 without). The PISM unit conversions enter as free names resolved by the importing model: seconds_per_year = 31556925.9747 s (the udunits tropical year, 365.242198781 days -- recovered from the stage-1 dump rate_m_yr/rate_m_s ratios) and seconds_per_day = 86400 s. Free names in template bodies (rho_i, rho_w, g, sigma_threshold, B_tilde, K, hardness_avg, glen_n, A, B, alpha, beta, seconds_per_year) resolve against the importing model's declared parameters (esm-spec 9.6.1). Reference implementation: PISM v2.3.2 (stage1/pism/src/frontretreat/calving/{EigenCalving,vonMisesCalving,HayhurstCalving}.cc, stage1/pism/src/stressbalance/StressBalance.cc compute_2D_principal_strain_rates, stage1/pism/src/coupler/frontalmelt/{FrontalMeltPhysics,FrontalMelt}.cc)."
+  },
+  "expression_templates": {
+    "strain_rate_mean": {
+      "description": "Mean strain rate A = 0.5*(u_x + v_y), the half-trace of the 2-D strain-rate tensor (StressBalance.cc compute_2D_principal_strain_rates).",
+      "params": ["u_x", "v_y"],
+      "match": { "op": "strain_rate_mean", "args": ["u_x", "v_y"] },
+      "body": {
+        "op": "*",
+        "args": [0.5, { "op": "+", "args": ["u_x", "v_y"] }]
+      }
+    },
+    "strain_rate_q": {
+      "description": "Deviatoric strain-rate magnitude q = sqrt((0.5*(u_x - v_y))^2 + (0.5*(v_x + u_y))^2), the B^2 + Dxy^2 square root of compute_2D_principal_strain_rates; q >= 0 so eigen1 >= eigen2.",
+      "params": ["u_x", "v_y", "u_y", "v_x"],
+      "match": { "op": "strain_rate_q", "args": ["u_x", "v_y", "u_y", "v_x"] },
+      "body": {
+        "op": "sqrt",
+        "args": [
+          { "op": "+",
+            "args": [
+              { "op": "^",
+                "args": [ { "op": "*", "args": [0.5, { "op": "-", "args": ["u_x", "v_y"] }] }, 2 ] },
+              { "op": "^",
+                "args": [ { "op": "*", "args": [0.5, { "op": "+", "args": ["v_x", "u_y"] }] }, 2 ] }
+            ] }
+        ]
+      }
+    },
+    "principal_strain_rate_eigen1": {
+      "description": "Largest principal strain rate eigen1 = A + q (compute_2D_principal_strain_rates; the A = 0.5*(u_x+v_y) mean strain rate).",
+      "params": ["u_x", "v_y", "u_y", "v_x"],
+      "match": { "op": "principal_strain_rate_eigen1", "args": ["u_x", "v_y", "u_y", "v_x"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "strain_rate_mean", "args": ["u_x", "v_y"] },
+          { "op": "strain_rate_q", "args": ["u_x", "v_y", "u_y", "v_x"] }
+        ]
+      }
+    },
+    "principal_strain_rate_eigen2": {
+      "description": "Smallest principal strain rate eigen2 = A - q (compute_2D_principal_strain_rates); q >= 0 so eigen1 >= eigen2 always.",
+      "params": ["u_x", "v_y", "u_y", "v_x"],
+      "match": { "op": "principal_strain_rate_eigen2", "args": ["u_x", "v_y", "u_y", "v_x"] },
+      "body": {
+        "op": "-",
+        "args": [
+          { "op": "strain_rate_mean", "args": ["u_x", "v_y"] },
+          { "op": "strain_rate_q", "args": ["u_x", "v_y", "u_y", "v_x"] }
+        ]
+      }
+    },
+    "flotation_thickness": {
+      "description": "Flotation thickness h_f = (sea_level - bed) * rho_w / rho_i: the ice thickness at which a cell with bed elevation bed and sea level sea_level is exactly at flotation (geometry::flotation criterion; the analytic h_f column of the FloatKill dump).",
+      "params": ["sea_level", "bed"],
+      "match": { "op": "flotation_thickness", "args": ["sea_level", "bed"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "-", "args": ["sea_level", "bed"] },
+          { "op": "/", "args": ["rho_w", "rho_i"] }
+        ]
+      }
+    },
+    "is_floating": {
+      "description": "Flotation criterion: a cell of thickness H over bed elevation bed at sea level sea_level is floating iff H < h_f = (sea_level - bed) * rho_w / rho_i (equivalently GeometryCalculator::is_floating with h_floating > h_grounded; the ice-free-thickness edge case of GeometryCalculator::compute is deferred to the geometry coupling).",
+      "params": ["H", "sea_level", "bed"],
+      "match": { "op": "is_floating", "args": ["H", "sea_level", "bed"] },
+      "body": {
+        "op": "<",
+        "args": [
+          "H",
+          { "op": "flotation_thickness", "args": ["sea_level", "bed"] }
+        ]
+      }
+    },
+    "hayhurst_H_eff": {
+      "description": "HayhurstCalving::update ice thickness with the floating-shelf adjustment: H_eff = water_depth + (1 - rho_i/rho_w)*H when omega_0 = water_depth/H exceeds rho_i/rho_w (the front is floating), else H_eff = H. The adjusted H replaces H in both sigma_0 and the calving rate (the source reassigns the local H).",
+      "params": ["water_depth", "H"],
+      "match": { "op": "hayhurst_H_eff", "args": ["water_depth", "H"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">",
+            "args": [
+              { "op": "/", "args": ["water_depth", "H"] },
+              { "op": "/", "args": ["rho_i", "rho_w"] }
+            ] },
+          { "op": "+",
+            "args": [
+              "water_depth",
+              { "op": "*",
+                "args": [
+                  { "op": "-", "args": [1.0, { "op": "/", "args": ["rho_i", "rho_w"] }] },
+                  "H"
+                ] }
+            ] },
+          "H"
+        ]
+      }
+    },
+    "hayhurst_omega": {
+      "description": "HayhurstCalving::update flotation ratio omega = water_depth / H_eff (after the floating-shelf adjustment; since H_eff = H when the adjustment does not apply, omega = water_depth / H_eff in both branches; omega <= rho_i/rho_w for the adjusted branch).",
+      "params": ["water_depth", "H"],
+      "match": { "op": "hayhurst_omega", "args": ["water_depth", "H"] },
+      "body": {
+        "op": "/",
+        "args": [
+          "water_depth",
+          { "op": "hayhurst_H_eff", "args": ["water_depth", "H"] }
+        ]
+      }
+    },
+    "hayhurst_sigma_0": {
+      "description": "HayhurstCalving::update maximum tensile stress approximation sigma_0 = max((0.4 - 0.45*(omega - 0.065)^2) * rho_i * g * H_eff, sigma_threshold) (Mercenier et al. 2018), computed with the floating-adjusted H_eff and clamped to sigma_threshold so that sigma_0 - sigma_threshold >= 0.",
+      "params": ["omega", "H_eff"],
+      "match": { "op": "hayhurst_sigma_0", "args": ["omega", "H_eff"] },
+      "body": {
+        "op": "max",
+        "args": [
+          { "op": "*",
+            "args": [
+              { "op": "-",
+                "args": [
+                  0.4,
+                  { "op": "*",
+                    "args": [
+                      0.45,
+                      { "op": "^",
+                        "args": [ { "op": "-", "args": ["omega", 0.065] }, 2.0 ] }
+                    ] }
+                ] },
+              "rho_i",
+              "g",
+              "H_eff"
+            ] },
+          "sigma_threshold"
+        ]
+      }
+    },
+    "hayhurst_unit_scaling": {
+      "description": "HayhurstCalving::update unit scaling unit_scaling = (1e-6)^r * (1 year -> seconds), converting the (MPa)^r / year damage-rate constant B_tilde to (Pa)^r / second: sigma_0 - sigma_threshold enters the rate in Pa and is converted to MPa by (1e-6)^r, and the year of B_tilde to seconds by seconds_per_year = 31556925.9747 (the udunits tropical year, from the stage-1 dump).",
+      "params": ["exponent_r"],
+      "match": { "op": "hayhurst_unit_scaling", "args": ["exponent_r"] },
+      "body": {
+        "op": "/",
+        "args": [
+          { "op": "^", "args": [1e-6, "exponent_r"] },
+          "seconds_per_year"
+        ]
+      }
+    },
+    "hayhurst_calving_rate": {
+      "description": "HayhurstCalving::update calving rate rate = B_tilde * unit_scaling * (1 - omega^2.8) * (sigma_0 - sigma_threshold)^r * H_eff (Mercenier et al. 2018 equation 22), with the floating-adjusted H_eff; applied at icy cells with water_depth > 0 (the mask branch lives in the consuming model).",
+      "params": ["B_tilde", "exponent_r", "omega", "sigma_0", "sigma_threshold", "H_eff"],
+      "match": { "op": "hayhurst_calving_rate", "args": ["B_tilde", "exponent_r", "omega", "sigma_0", "sigma_threshold", "H_eff"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "B_tilde",
+          { "op": "hayhurst_unit_scaling", "args": ["exponent_r"] },
+          { "op": "-",
+            "args": [ 1.0, { "op": "^", "args": ["omega", 2.8] } ] },
+          { "op": "^",
+            "args": [ { "op": "-", "args": ["sigma_0", "sigma_threshold"] }, "exponent_r" ] },
+          "H_eff"
+        ]
+      }
+    },
+    "eigen_calving_rate": {
+      "description": "EigenCalving::update calving law rate = K * eigen1 * (eigen2 - eigen_calv_offset) with eigen_calv_offset = 0 when the flow is extensive (eigen2 > offset and eigen1 > 0), else 0 (the compressive branch; Winkelmann et al. 2011 equation 26). The calving-front mask gating (ice-free ocean next to floating ice) lives in the consuming model.",
+      "params": ["eigen1_avg", "eigen2_avg", "K"],
+      "match": { "op": "eigen_calving_rate", "args": ["eigen1_avg", "eigen2_avg", "K"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "and",
+            "args": [
+              { "op": ">", "args": ["eigen2_avg", 0.0] },
+              { "op": ">", "args": ["eigen1_avg", 0.0] }
+            ] },
+          { "op": "*",
+            "args": [ "K", { "op": "*", "args": ["eigen1_avg", "eigen2_avg"] } ] },
+          0.0
+        ]
+      }
+    },
+    "vonmises_effective_tensile_strain_rate": {
+      "description": "vonMisesCalving::update effective tensile strain rate e_s = sqrt(0.5 * (max(0, eigen1)^2 + max(0, eigen2)^2)) over the averaged principal strain rates (Morlighem et al. 2016 equation 6); the max(0, .) keeps the compressive eigenvalue from contributing.",
+      "params": ["eigen1_avg", "eigen2_avg"],
+      "match": { "op": "vonmises_effective_tensile_strain_rate", "args": ["eigen1_avg", "eigen2_avg"] },
+      "body": {
+        "op": "sqrt",
+        "args": [
+          { "op": "*",
+            "args": [
+              0.5,
+              { "op": "+",
+                "args": [
+                  { "op": "^",
+                    "args": [ { "op": "max", "args": [0.0, "eigen1_avg"] }, 2 ] },
+                  { "op": "^",
+                    "args": [ { "op": "max", "args": [0.0, "eigen2_avg"] }, 2 ] }
+                ] }
+            ] }
+        ]
+      }
+    },
+    "vonmises_sigma_tilde": {
+      "description": "vonMisesCalving::update flow-law stress sigma_tilde = sqrt(3) * hardness * e_s^(1/n) with hardness the vertically averaged flow-law hardness B over the sampled cells and n the Glen exponent (Morlighem et al. 2016 equation 7).",
+      "params": ["hardness_avg", "e_s", "glen_n"],
+      "match": { "op": "vonmises_sigma_tilde", "args": ["hardness_avg", "e_s", "glen_n"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "sqrt", "args": [3.0] },
+          "hardness_avg",
+          { "op": "^", "args": ["e_s", { "op": "/", "args": [1.0, "glen_n"] }] }
+        ]
+      }
+    },
+    "frontal_melt_undercutting": {
+      "description": "FrontalMeltPhysics::frontal_melt_from_undercutting: q_m = (A * h * q_sg^alpha + B) * TF^beta (Rignot et al. 2016 equation 1, the Xu et al. 2013 parameterization with the routing tuning parameters), returning 0 when h <= 0 or q_sg < 0 or TF < 0 (the nonnegativity clamps). Units: h m, q_sg m/day, TF Celsius, q_m m/day.",
+      "params": ["h", "q_sg", "TF"],
+      "match": { "op": "frontal_melt_undercutting", "args": ["h", "q_sg", "TF"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "or",
+            "args": [
+              { "op": "<=", "args": ["h", 0.0] },
+              { "op": "or",
+                "args": [
+                  { "op": "<", "args": ["q_sg", 0.0] },
+                  { "op": "<", "args": ["TF", 0.0] }
+                ] }
+            ] },
+          0.0,
+          { "op": "*",
+            "args": [
+              { "op": "+",
+                "args": [
+                  { "op": "*",
+                    "args": [ "A", "h", { "op": "^", "args": ["q_sg", "alpha"] } ] },
+                  "B"
+                ] },
+              { "op": "^", "args": ["TF", "beta"] }
+            ] }
+        ]
+      }
+    },
+    "frontal_melt_ismip6": {
+      "description": "FrontalMeltPhysics::frontal_melt_from_ismip6: the same power law q_m = (A * h * q_sg^alpha + B) * TF^beta WITHOUT the nonnegativity clamps (the raw power law, NaN for negative q_sg or TF raised to the fractional exponents).",
+      "params": ["h", "q_sg", "TF"],
+      "match": { "op": "frontal_melt_ismip6", "args": ["h", "q_sg", "TF"] },
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "+",
+            "args": [
+              { "op": "*",
+                "args": [ "A", "h", { "op": "^", "args": ["q_sg", "alpha"] } ] },
+              "B"
+            ] },
+          { "op": "^", "args": ["TF", "beta"] }
+        ]
+      }
+    },
+    "frontal_melt_H_submerged": {
+      "description": "FrontalMelt::compute_retreat_rate submerged front thickness: H_submerged = (rho_i/rho_w) * H_threshold for a floating front (H_threshold < the flotation thickness), else max(sea_level - bed, 0) for a grounded front (the GeometryCalculator mask of the hypothetical H_thickness cell; the ice-free-thickness edge cases deferred to the geometry coupling).",
+      "params": ["H_threshold", "sea_level", "bed"],
+      "match": { "op": "frontal_melt_H_submerged", "args": ["H_threshold", "sea_level", "bed"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "is_floating", "args": ["H_threshold", "sea_level", "bed"] },
+          { "op": "*",
+            "args": [ { "op": "/", "args": ["rho_i", "rho_w"] }, "H_threshold" ] },
+          { "op": "max",
+            "args": [ { "op": "-", "args": ["sea_level", "bed"] }, 0.0 ] }
+        ]
+      }
+    }
+  }
+}
