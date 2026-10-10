@@ -1,0 +1,347 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "geometry_templates",
+    "description": "Expression-template library for the PISM geometry (mass continuity) component (stage 2 of the eqice project): the flux-limited finite-volume discretization of the mass-continuity equation dH/dt = -div(Q) of GeometryEvolution::flow_step -- first-order upwind advective face fluxes with the iciness-weighted face velocity, the mask-based face-flux limiting (limit_advective_flux / limit_diffusive_flux), and the staggered-grid flux divergence with the zero-flux outer boundary -- plus the pointwise helpers of GeometryEvolution::source_term_step (effective_change) and of the geometry update (cell mask and surface from thickness, part_grid_threshold_thickness). This file declares the 2-D cartesian grid contract itself (metaparameters NX, NY and index sets x, y) rather than importing the cartesian_uniform_1d grid library of EarthSciDiscretizations, because the PISM stencil is 2-D with a STAGGERED (edge) flux layout and a mask-dependent face limiter that the 1-D rules do not cover; the two divergence rules below are the documented starting point for a future 2-D staggered-grid rule PR to EarthSciDiscretizations (they follow the rule contracts of grids/cartesian_uniform_1d/rules: match-scoped, free names dx/dy resolving in the consuming model). Free names in template bodies (constants and parameters such as dx, dy, NX, NY, qx, u, v, H, mask_in, ...) resolve against the importing model's declared parameters (esm-spec 9.6.1). Reference implementation: PISM v2.3.2 (stage1/pism/src/geometry/GeometryEvolution.cc: compute_interface_fluxes, limit_advective_flux, limit_diffusive_flux, compute_flux_divergence, effective_change; util/Mask.cc; geometry/part_grid_threshold_thickness.cc).",
+    "license": "GPL-3.0-or-later",
+    "tags": ["eqice:stage2", "esd:rule", "grid:cartesian_uniform_2d", "op:D"]
+  },
+  "metaparameters": {
+    "NX": { "type": "integer", "default": 31, "description": "Number of cells along x (the test-F geometry run has Mx = 31 cells)." },
+    "NY": { "type": "integer", "default": 31, "description": "Number of cells along y (the test-F geometry run has My = 31 cells)." }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "NX" },
+    "y": { "kind": "interval", "size": "NY" }
+  },
+  "expression_templates": {
+    "pism_icy": {
+      "description": "PISM mask predicate 'icy' (util/Mask.hh mask::icy): 1 for grounded ice (mask 2) or floating ice (mask 3), 0 for ice-free bedrock (0) and ice-free ocean (4).",
+      "params": ["m"],
+      "match": { "op": "pism_icy", "args": ["m"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "==", "args": ["m", 2.0] },
+          1.0,
+          { "op": "ifelse", "args": [
+            { "op": "==", "args": ["m", 3.0] },
+            1.0,
+            0.0
+          ] }
+        ]
+      }
+    },
+    "pism_face_velocity": {
+      "description": "Advective velocity at a cell face, averaged from the two adjacent cell velocities with the iciness weights W_c, W_n (0 or 1) and the PISM guard max(W_c + W_n, 1): (W_c*u_c + W_n*u_n)/max(W_c + W_n, 1) (GeometryEvolution::compute_interface_fluxes, v_staggered). The iciness weighting means an ice-free cell's velocity does not contribute to the face velocity, and a face between two ice-free cells gets exactly 0.",
+      "params": ["u_c", "u_n", "W_c", "W_n"],
+      "match": { "op": "pism_face_velocity", "args": ["u_c", "u_n", "W_c", "W_n"] },
+      "body": {
+        "op": "/",
+        "args": [
+          { "op": "+", "args": [
+            { "op": "*", "args": ["W_c", "u_c"] },
+            { "op": "*", "args": ["W_n", "u_n"] }
+          ] },
+          { "op": "max", "args": [
+            { "op": "+", "args": ["W_c", "W_n"] },
+            1.0
+          ] }
+        ]
+      }
+    },
+    "pism_upwind_face_flux": {
+      "description": "First-order upwind advective flux v*H_upwind across a face with face-normal velocity v: v*(v > 0 ? H_c : H_n), where H_c is the thickness of the cell on the current side and H_n of the neighbor (GeometryEvolution::compute_interface_fluxes, Q_advective). Positive flux = transport from the current cell to the neighbor.",
+      "params": ["v", "H_c", "H_n"],
+      "match": { "op": "pism_upwind_face_flux", "args": ["v", "H_c", "H_n"] },
+      "body": {
+        "op": "*",
+        "args": [
+          "v",
+          { "op": "ifelse", "args": [
+            { "op": ">", "args": ["v", 0.0] },
+            "H_c",
+            "H_n"
+          ] }
+        ]
+      }
+    },
+    "pism_limit_face_flux": {
+      "description": "PISM mask-based face-flux limiter (GeometryEvolution::limit_advective_flux for kind 0, limit_diffusive_flux for kind 1): returns the flux q (positive = from the current cell to the neighbor) if the (current, neighbor) mask pair is allowed, else 0. The two sign checks first kill every flux OUT of an ice-free cell (no flow from ice-free ocean or ice-free land), then the pair table decides: advective flow is allowed for (grounded,grounded), (grounded,floating), (floating,grounded), (grounded,ice-free-land), (ice-free-land,grounded), (grounded,ice-free-ocean), (ice-free-ocean,grounded), (floating,floating), (floating,ice-free-ocean), (ice-free-ocean,floating); the diffusive limiter additionally disables SIA-driven flow in ice shelves and across ice-shelf fronts: (floating,floating), (floating,ice-free-ocean), (ice-free-ocean,floating) are zeroed. All other pairs (ice-free-ice-free, floating-ice-free-land) get 0. In the flat-bed test-F trace only the masks 0 (ice-free bedrock) and 2 (grounded) occur, and every nonzero flux is outward (positive), so the sign checks never fire and the limiter reduces to: pass (0,2), (2,0), (2,2); zero (0,0).",
+      "params": ["kind", "mc", "mn", "q"],
+      "match": { "op": "pism_limit_face_flux", "args": ["kind", "mc", "mn", "q"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "or", "args": [
+            { "op": "and", "args": [
+              { "op": "==", "args": ["mc", 4.0] },
+              { "op": ">", "args": ["q", 0.0] }
+            ] },
+            { "op": "and", "args": [
+              { "op": "==", "args": ["mn", 4.0] },
+              { "op": "<", "args": ["q", 0.0] }
+            ] }
+          ] },
+          0.0,
+          { "op": "ifelse",
+            "args": [
+              { "op": "or", "args": [
+                { "op": "and", "args": [
+                  { "op": "==", "args": ["mc", 0.0] },
+                  { "op": ">", "args": ["q", 0.0] }
+                ] },
+                { "op": "and", "args": [
+                  { "op": "==", "args": ["mn", 0.0] },
+                  { "op": "<", "args": ["q", 0.0] }
+                ] }
+              ] },
+              0.0,
+              { "op": "ifelse", "args": [
+                { "op": "==", "args": ["kind", 0.0] },
+                { "op": "ifelse", "args": [
+                  { "op": "or", "args": [
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 2.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 3.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 3.0] }, { "op": "==", "args": ["mn", 2.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 0.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 0.0] }, { "op": "==", "args": ["mn", 2.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 4.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 4.0] }, { "op": "==", "args": ["mn", 2.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 3.0] }, { "op": "==", "args": ["mn", 3.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 3.0] }, { "op": "==", "args": ["mn", 4.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 4.0] }, { "op": "==", "args": ["mn", 3.0] }] }
+                  ] },
+                  "q",
+                  0.0
+                ] },
+                { "op": "ifelse", "args": [
+                  { "op": "or", "args": [
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 2.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 3.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 3.0] }, { "op": "==", "args": ["mn", 2.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 0.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 0.0] }, { "op": "==", "args": ["mn", 2.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 2.0] }, { "op": "==", "args": ["mn", 4.0] }] },
+                    { "op": "and", "args": [{ "op": "==", "args": ["mc", 4.0] }, { "op": "==", "args": ["mn", 2.0] }] }
+                  ] },
+                  "q",
+                  0.0
+                ] }
+              ] }
+            ] }
+        ]
+      }
+    },
+    "pism_face_flux": {
+      "description": "Total limited flux through one face of the current cell: the mask-limited diffusive flux plus the mask-limited first-order upwind advective flux (GeometryEvolution::compute_interface_fluxes: output = Q_diffusive + Q_advective with Q_diffusive = limit_diffusive_flux(mc, mn, diffusive_flux) and Q_advective = limit_advective_flux(mc, mn, v_face * upwind_H), the face velocity v_face = pism_face_velocity(u_c, u_n, W_c, W_n) with the iciness weights W_c = pism_icy(mc), W_n = pism_icy(mn) supplied by the caller). Positive = transport from the current cell to the neighbor.",
+      "params": ["mc", "mn", "q_diff", "u_c", "u_n", "W_c", "W_n", "H_c", "H_n"],
+      "match": { "op": "pism_face_flux", "args": ["mc", "mn", "q_diff", "u_c", "u_n", "W_c", "W_n", "H_c", "H_n"] },
+      "body": {
+        "op": "+",
+        "args": [
+          { "op": "pism_limit_face_flux", "args": [1.0, "mc", "mn", "q_diff"] },
+          { "op": "pism_limit_face_flux", "args": [
+            0.0,
+            "mc",
+            "mn",
+            { "op": "pism_upwind_face_flux", "args": [
+              { "op": "pism_face_velocity", "args": ["u_c", "u_n", "W_c", "W_n"] },
+              "H_c",
+              "H_n"
+            ] }
+          ] }
+        ]
+      }
+    },
+    "pism_flow_divergence_x": {
+      "description": "x-component of the finite-volume flux divergence on the PISM staggered grid, matching D(Q, wrt: x) at default priority: div_x Q = (Q(i,j) - Q(i-1,j))/dx, where Q(i,j) is the flux through the EAST face of cell (i,j) (the PISM staggered layout: output(i,j,0) sits on the edge between cells i and i+1, so cell (i,j)'s east face flux is Q(i,j) and its west face flux is Q(i-1,j); GeometryEvolution::compute_flux_divergence divQ = (Q.e - Q.w)/dx + (Q.n - Q.s)/dy with flux.star(i,j) = {e: Q(i,j,0), w: Q(i-1,j,0), n: Q(i,j,1), s: Q(i,j-1,1)}). The west face of the first column (i = 1) is the domain boundary, whose flux is 0 (the mask limiter zeroes every flux on the outer ring of the ice-free test-F domain; the general boundary closure for the future EarthSciDiscretizations PR is the zero-flux/ice-free-wall of the PISM ghost mask). Match-scoped with where {Q:{shape:[x,y]}} so it fires only on this grid's x-shaped 2-D fields. `dx` is a free name resolving to the consuming model's spacing. This is the discrete form of -dH/dt's x-term that telescopes to zero over the closed domain (sum over i of (Q(i,j) - Q(i-1,j)) = Q(NX,j) - Q(0,j) = 0 - 0).",
+      "params": ["Q"],
+      "match": { "op": "D", "args": ["Q"], "wrt": "x" },
+      "where": { "Q": { "shape": ["x", "y"] } },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [[[1, 1], [1, "NY"]], [[2, "NX"], [1, "NY"]]],
+        "values": [
+          {
+            "op": "faq",
+            "output_idx": ["i", "j"],
+            "args": ["Q"],
+            "ranges": { "i": [1, 1], "j": [1, "NY"] },
+            "expr": {
+              "op": "/",
+              "args": [{ "op": "index", "args": ["Q", "i", "j"] }, "dx"]
+            }
+          },
+          {
+            "op": "faq",
+            "output_idx": ["i", "j"],
+            "args": ["Q"],
+            "ranges": { "i": [2, "NX"], "j": [1, "NY"] },
+            "expr": {
+              "op": "/",
+              "args": [
+                { "op": "-",
+                  "args": [
+                    { "op": "index", "args": ["Q", "i", "j"] },
+                    { "op": "index", "args": ["Q", { "op": "-", "args": ["i", 1] }, "j"] }
+                  ] },
+                "dx"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "pism_flow_divergence_y": {
+      "description": "y-component of the finite-volume flux divergence on the PISM staggered grid, matching D(Q, wrt: y): div_y Q = (Q(i,j) - Q(i,j-1))/dy, where Q(i,j) is the flux through the NORTH face of cell (i,j) (the PISM staggered layout: output(i,j,1) sits on the edge between cells j and j+1; GeometryEvolution::compute_flux_divergence). The south face of the first row (j = 1) is the domain boundary with flux 0 (zero-flux outer ring, see pism_flow_divergence_x). Match-scoped with where {Q:{shape:[x,y]}}. `dy` is a free name resolving to the consuming model's spacing.",
+      "params": ["Q"],
+      "match": { "op": "D", "args": ["Q"], "wrt": "y" },
+      "where": { "Q": { "shape": ["x", "y"] } },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [[[1, "NX"], [1, 1]], [[1, "NX"], [2, "NY"]]],
+        "values": [
+          {
+            "op": "faq",
+            "output_idx": ["i", "j"],
+            "args": ["Q"],
+            "ranges": { "i": [1, "NX"], "j": [1, 1] },
+            "expr": {
+              "op": "/",
+              "args": [{ "op": "index", "args": ["Q", "i", "j"] }, "dy"]
+            }
+          },
+          {
+            "op": "faq",
+            "output_idx": ["i", "j"],
+            "args": ["Q"],
+            "ranges": { "i": [1, "NX"], "j": [2, "NY"] },
+            "expr": {
+              "op": "/",
+              "args": [
+                { "op": "-",
+                  "args": [
+                    { "op": "index", "args": ["Q", "i", "j"] },
+                    { "op": "index", "args": ["Q", "i", { "op": "-", "args": ["j", 1] }] }
+                  ] },
+                "dy"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "pism_effective_change": {
+      "description": "PISM effective_change (GeometryEvolution.cc, static inline): the thickness change dH applied to a cell of thickness H while preserving non-negativity: if H + dH <= 0 the cell is drained exactly to zero and the change is -H, otherwise dH unchanged. This is the clamping of GeometryEvolution::source_term_step (applied first to the SMB change against H, then to the BMB change against H + dH_SMB).",
+      "params": ["H", "dH"],
+      "match": { "op": "pism_effective_change", "args": ["H", "dH"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "<=", "args": [{ "op": "+", "args": ["H", "dH"] }, 0.0] },
+          { "op": "-", "args": ["H"] },
+          "dH"
+        ]
+      }
+    },
+    "pism_cell_mask": {
+      "description": "PISM cell-type mask of a cell with sea level, bed, thickness H, flotation coefficient alpha = rho_ice/rho_water and the ice-free thickness threshold thr (util/Mask.hh GeometryCalculator::compute): floating (hfloating = sea_level + alpha*H > hgrounded = bed + H) gives 4 (ice-free ocean) when H <= thr and 3 (floating ice) otherwise; grounded gives 0 (ice-free bedrock) when H <= thr and 2 (grounded ice) otherwise.",
+      "params": ["sea_level", "bed", "H", "alpha", "thr"],
+      "match": { "op": "pism_cell_mask", "args": ["sea_level", "bed", "H", "alpha", "thr"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": [
+            { "op": "+", "args": ["sea_level", { "op": "*", "args": ["alpha", "H"] }] },
+            { "op": "+", "args": ["bed", "H"] }
+          ] },
+          { "op": "ifelse", "args": [
+            { "op": "<=", "args": ["H", "thr"] },
+            4.0,
+            3.0
+          ] },
+          { "op": "ifelse", "args": [
+            { "op": "<=", "args": ["H", "thr"] },
+            0.0,
+            2.0
+          ] }
+        ]
+      }
+    },
+    "pism_cell_surface": {
+      "description": "PISM ice surface elevation of a cell (util/Mask.hh GeometryCalculator::compute): hfloating = sea_level + alpha*H for floating cells, hgrounded = bed + H for grounded cells, with alpha = rho_ice/rho_water.",
+      "params": ["sea_level", "bed", "H", "alpha"],
+      "match": { "op": "pism_cell_surface", "args": ["sea_level", "bed", "H", "alpha"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": ">", "args": [
+            { "op": "+", "args": ["sea_level", { "op": "*", "args": ["alpha", "H"] }] },
+            { "op": "+", "args": ["bed", "H"] }
+          ] },
+          { "op": "+", "args": ["sea_level", { "op": "*", "args": ["alpha", "H"] }] },
+          { "op": "+", "args": ["bed", "H"] }
+        ]
+      }
+    },
+    "pism_part_grid_threshold_thickness": {
+      "description": "PISM part_grid_threshold_thickness (geometry/part_grid_threshold_thickness.cc): the threshold thickness of a partially filled cell, computed from the 5-point mask star (c, n, e, s, w), the thickness star and the surface-elevation star and the cell's bed elevation. Averages the thickness H and the surface elevation h over the icy (mask 2 or 3) N/S/E/W neighbors (N = number of icy neighbors), then returns max(min(h_avg - bed, H_avg), 0); with no icy neighbors the threshold is 0 (forcing the cell's area-specific volume to be converted to thickness immediately). All 560 sampled rows of the Stage-1 dump (stage1/dumps/geometry/pointwise.csv) reproduce this closed form to < 1e-14.",
+      "params": ["mask_c", "mask_n", "mask_e", "mask_s", "mask_w", "H_c", "H_n", "H_e", "H_s", "H_w", "h_c", "h_n", "h_e", "h_s", "h_w", "bed"],
+      "match": { "op": "pism_part_grid_threshold_thickness", "args": ["mask_c", "mask_n", "mask_e", "mask_s", "mask_w", "H_c", "H_n", "H_e", "H_s", "H_w", "h_c", "h_n", "h_e", "h_s", "h_w", "bed"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          { "op": "==", "args": [
+            { "op": "+", "args": [
+              { "op": "pism_icy", "args": ["mask_n"] },
+              { "op": "pism_icy", "args": ["mask_e"] },
+              { "op": "pism_icy", "args": ["mask_s"] },
+              { "op": "pism_icy", "args": ["mask_w"] }
+            ] },
+            0.0
+          ] },
+          0.0,
+          { "op": "max", "args": [
+            { "op": "min", "args": [
+              { "op": "-", "args": [
+                { "op": "/", "args": [
+                  { "op": "+", "args": [
+                    { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_n"] }, "h_n"] },
+                    { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_e"] }, "h_e"] },
+                    { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_s"] }, "h_s"] },
+                    { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_w"] }, "h_w"] }
+                  ] },
+                  { "op": "+", "args": [
+                    { "op": "pism_icy", "args": ["mask_n"] },
+                    { "op": "pism_icy", "args": ["mask_e"] },
+                    { "op": "pism_icy", "args": ["mask_s"] },
+                    { "op": "pism_icy", "args": ["mask_w"] }
+                  ] }
+                ] },
+                "bed"
+              ] },
+              { "op": "/", "args": [
+                { "op": "+", "args": [
+                  { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_n"] }, "H_n"] },
+                  { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_e"] }, "H_e"] },
+                  { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_s"] }, "H_s"] },
+                  { "op": "*", "args": [{ "op": "pism_icy", "args": ["mask_w"] }, "H_w"] }
+                ] },
+                { "op": "+", "args": [
+                  { "op": "pism_icy", "args": ["mask_n"] },
+                  { "op": "pism_icy", "args": ["mask_e"] },
+                  { "op": "pism_icy", "args": ["mask_s"] },
+                  { "op": "pism_icy", "args": ["mask_w"] }
+                ] }
+              ] }
+            ] },
+            0.0
+          ] }
+        ]
+      }
+    }
+  }
+}
