@@ -1,0 +1,235 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "stress_balance_templates",
+    "description": "Expression-template library for the PISM stress-balance subassembly (stage 2 of the eqice project). Carries the shared StressBalance D-methods and their stencils: the Mask.hh iciness predicates and the mask-limited derivative weights (StressBalance::compute_vertical_velocity and compute_volumetric_strain_heating switch between centered differences in the interior and one-sided differences at ice margins), the one-sided/centered x- and y-derivative rules with the zero-scale guard of the C++ (D_x = 1/(dx*(east+west)), 0 when both weights vanish), the squared second invariant D2 of the strain-rate tensor under the shallow approximations (w_x = w_y = 0, w_z = -(u_x+v_y); StressBalance.cc D2()), the volumetric strain heating Sigma = 2*e^(-1/n)*B*D2^(0.5*(1/n+1)) with the ice hardness B = (A_cold*exp(-Q_cold/(R*T_pa)))^(-1/n) evaluated from the pressure-ADJUSTED temperature T_pa = T(E,p) + beta*p (PatersonBuddCold::softness_from_temp through FlowLaw::hardness_n -- note the C++ inconsistency, reported in the subassembly metadata: the SIA flow factor of SIAFD::flow_n uses the absolute temperature while this hardness uses T_pa), and the basal frictional heating F_b = C*(vx^2+vy^2) with the purely-plastic drag coefficient C = tauc/sqrt(eps^2+vx^2+vy^2) and the ice-free-ocean skip (ShallowStressBalance::compute_basal_frictional_heating). Templates referencing other templates (hardness_from_softness, arrhenius_softness, pressure_adjusted_temperature from ./ice_rheology_templates.esm; plastic_drag from ./basal_templates.esm) require the importing model to also import those libraries. Free names in template bodies (A_cold, Q_cold, R_ideal_gas, T_0, T_melting, beta_Clausius_Clapeyron, c_ice, n, ...) resolve against the importing model's declared parameters (esm-spec 9.6.1). Reference implementation: PISM v2.3.2 (stage1/pism/src/stressbalance/StressBalance.cc, ShallowStressBalance.cc; stage1/pism/src/basalstrength/basal_resistance.cc)."
+  },
+  "expression_templates": {
+    "sb_icy": {
+      "description": "Mask.hh iciness predicate: the cell is icy when its mask is grounded (2) or floating (3).",
+      "params": ["m"],
+      "match": { "op": "sb_icy", "args": ["m"] },
+      "body": {
+        "op": "or",
+        "args": [
+          { "op": "==", "args": ["m", 2] },
+          { "op": "==", "args": ["m", 3] }
+        ]
+      }
+    },
+    "sb_ice_free": {
+      "description": "Mask.hh ice-free predicate: the cell is ice-free when its mask is ice-free bedrock (0) or ice-free ocean (4).",
+      "params": ["m"],
+      "match": { "op": "sb_ice_free", "args": ["m"] },
+      "body": {
+        "op": "or",
+        "args": [
+          { "op": "==", "args": ["m", 0] },
+          { "op": "==", "args": ["m", 4] }
+        ]
+      }
+    },
+    "sb_mask_weight": {
+      "description": "Derivative stencil weight across an edge: 0 when the two cells straddle an ice margin -- (icy(center) and ice-free(neighbor)) or (ice-free(center) and icy(neighbor)) -- and 1 otherwise. This is exactly the C++ west/east/south/north weight initialization and margin zeroing of StressBalance::compute_vertical_velocity and compute_volumetric_strain_heating.",
+      "params": ["mc", "mn"],
+      "match": { "op": "sb_mask_weight", "args": ["mc", "mn"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": "or",
+            "args": [
+              {
+                "op": "and",
+                "args": [
+                  { "op": "sb_icy", "args": ["mc"] },
+                  { "op": "sb_ice_free", "args": ["mn"] }
+                ]
+              },
+              {
+                "op": "and",
+                "args": [
+                  { "op": "sb_ice_free", "args": ["mc"] },
+                  { "op": "sb_icy", "args": ["mn"] }
+                ]
+              }
+            ]
+          },
+          0.0,
+          1.0
+        ]
+      }
+    },
+    "sb_derivative_x": {
+      "description": "Mask-limited x-derivative u_x = (west*(u_c - u_w) + east*(u_e - u_c)) * D_x with D_x = 1/(dx*(east+west)) when at least one weight is 1 and D_x = 0 when both vanish (the C++ guard: with both weights 0 the numerator is 0 too, so the derivative is 0; StressBalance::compute_vertical_velocity / compute_volumetric_strain_heating).",
+      "params": ["west", "east", "dx", "u_c", "u_w", "u_e"],
+      "match": { "op": "sb_derivative_x", "args": ["west", "east", "dx", "u_c", "u_w", "u_e"] },
+      "body": {
+        "op": "*",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              { "op": "*", "args": ["west", { "op": "-", "args": ["u_c", "u_w"] }] },
+              { "op": "*", "args": ["east", { "op": "-", "args": ["u_e", "u_c"] }] }
+            ]
+          },
+          {
+            "op": "ifelse",
+            "args": [
+              { "op": ">", "args": [{ "op": "+", "args": ["east", "west"] }, 0] },
+              {
+                "op": "/",
+                "args": [
+                  1.0,
+                  { "op": "*", "args": ["dx", { "op": "+", "args": ["east", "west"] }] }
+                ]
+              },
+              0.0
+            ]
+          }
+        ]
+      }
+    },
+    "sb_derivative_y": {
+      "description": "Mask-limited y-derivative v_y = (south*(v_c - v_s) + north*(v_n - v_c)) * D_y with D_y = 1/(dy*(south+north)) when at least one weight is 1 and D_y = 0 when both vanish (the y analogue of sb_derivative_x; StressBalance::compute_vertical_velocity / compute_volumetric_strain_heating).",
+      "params": ["south", "north", "dy", "v_c", "v_s", "v_n"],
+      "match": { "op": "sb_derivative_y", "args": ["south", "north", "dy", "v_c", "v_s", "v_n"] },
+      "body": {
+        "op": "*",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              { "op": "*", "args": ["south", { "op": "-", "args": ["v_c", "v_s"] }] },
+              { "op": "*", "args": ["north", { "op": "-", "args": ["v_n", "v_c"] }] }
+            ]
+          },
+          {
+            "op": "ifelse",
+            "args": [
+              { "op": ">", "args": [{ "op": "+", "args": ["north", "south"] }, 0] },
+              {
+                "op": "/",
+                "args": [
+                  1.0,
+                  { "op": "*", "args": ["dy", { "op": "+", "args": ["north", "south"] }] }
+                ]
+              },
+              0.0
+            ]
+          }
+        ]
+      }
+    },
+    "sb_D2": {
+      "description": "Squared second invariant of the strain-rate tensor under the shallow approximations (w_x = w_y = 0, w_z = -(u_x+v_y)): D2 = 0.5*((u_x+v_y)^2 + u_x^2 + v_y^2 + 0.5*((u_y+v_x)^2 + u_z^2 + v_z^2)) (StressBalance.cc D2()).",
+      "params": ["u_x", "u_y", "u_z", "v_x", "v_y", "v_z"],
+      "match": { "op": "sb_D2", "args": ["u_x", "u_y", "u_z", "v_x", "v_y", "v_z"] },
+      "body": {
+        "op": "*",
+        "args": [
+          0.5,
+          {
+            "op": "+",
+            "args": [
+              { "op": "^", "args": [{ "op": "+", "args": ["u_x", "v_y"] }, 2] },
+              { "op": "^", "args": ["u_x", 2] },
+              { "op": "^", "args": ["v_y", 2] },
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  {
+                    "op": "+",
+                    "args": [
+                      { "op": "^", "args": [{ "op": "+", "args": ["u_y", "v_x"] }, 2] },
+                      { "op": "^", "args": ["u_z", 2] },
+                      { "op": "^", "args": ["v_z", 2] }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "sb_hardness_arr": {
+      "description": "Ice hardness B = (A_cold*exp(-Q_cold/(R*T_pa)))^(-1/n) with the pressure-adjusted temperature T_pa = T(E,p) + beta*p (PatersonBuddCold::softness_from_temp through FlowLaw::hardness_n, the 'arr' flow-law hardness of the instrumented run). NOTE the C++ inconsistency this encodes: the SIA diffusivity chain (sia_templates.esm sia_flow_arr) evaluates the same Paterson-Budd cold law at the ABSOLUTE temperature while the strain-heating hardness uses the pressure-ADJUSTED one; both were verified against the stage-1 dumps and are reproduced faithfully here (see the stress_balance.esm metadata).",
+      "params": ["E", "p"],
+      "match": { "op": "sb_hardness_arr", "args": ["E", "p"] },
+      "body": {
+        "op": "hardness_from_softness",
+        "args": [
+          {
+            "op": "arrhenius_softness",
+            "args": [
+              "A_cold",
+              "Q_cold",
+              { "op": "pressure_adjusted_temperature", "args": ["E", "p"] }
+            ]
+          },
+          "n"
+        ]
+      }
+    },
+    "sb_strain_heating": {
+      "description": "Volumetric strain heating Sigma = 2 * e^(-1/n) * B * D2^(0.5*(1/n+1)) (StressBalance::compute_volumetric_strain_heating: exponent = 0.5*(1/n+1), e_to_a_power = pow(enhancement_factor, -1/n); Sigma = 2*B*D^((1/n)+1) with D^2 = D2).",
+      "params": ["e_factor", "B", "D2", "n"],
+      "match": { "op": "sb_strain_heating", "args": ["e_factor", "B", "D2", "n"] },
+      "body": {
+        "op": "*",
+        "args": [
+          2.0,
+          { "op": "^", "args": ["e_factor", { "op": "/", "args": [{ "op": "-", "args": [1.0] }, "n"] }] },
+          "B",
+          {
+            "op": "^",
+            "args": [
+              "D2",
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  { "op": "+", "args": [{ "op": "/", "args": [1.0, "n"] }, 1.0] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "sb_basal_frictional_heating": {
+      "description": "Basal frictional heating F_b = C*(vx^2 + vy^2) with the purely-plastic drag coefficient C = tauc/sqrt(eps^2+vx^2+vy^2), zero on ocean cells -- floating ice (3) or ice-free ocean (4), the mask.ocean(i,j) skip of ShallowStressBalance::compute_basal_frictional_heating (util/Mask.hh: ocean(M) = M >= MASK_FLOATING): basal_stress = -C*V and F_b = -basal_stress_x*vx - basal_stress_y*vy = C*(vx^2+vy^2).",
+      "params": ["mask", "tauc", "eps", "vx", "vy"],
+      "match": { "op": "sb_basal_frictional_heating", "args": ["mask", "tauc", "eps", "vx", "vy"] },
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": "or",
+            "args": [
+              { "op": "==", "args": ["mask", 3] },
+              { "op": "==", "args": ["mask", 4] }
+            ]
+          },
+          0.0,
+          {
+            "op": "*",
+            "args": [
+              { "op": "plastic_drag", "args": ["tauc", "eps", "vx", "vy"] },
+              {
+                "op": "+",
+                "args": [
+                  { "op": "^", "args": ["vx", 2] },
+                  { "op": "^", "args": ["vy", 2] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

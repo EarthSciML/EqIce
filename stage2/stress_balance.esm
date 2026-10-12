@@ -1,0 +1,1323 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "stress_balance",
+    "description": "PISM stress-balance subassembly (stage 2 of the eqice project): the SIA and SSA stress-balance components of stage 2 mounted by reference and coupled into the shared StressBalance D-methods -- the assembled 2D velocity (ubar, vbar), the 3D velocity selection (u3, v3), the horizontal divergence and vertical velocity from incompressibility (div, w3), the volumetric strain heating (sigma), the basal frictional heating (F_b), and the SIA diffusive flux (q_x, q_y) -- reproducing the single-cell outputs of the instrumented PISM v2.3.2 runs (stage1/dumps/sia/, stage1/dumps/ssa/). The stress-balance model is selected at the CONFIG level in PISM 2.3.2 (stress_balance.model in {sia, ssa, ssa+sia, ...}, stressbalance/factory.cc): there is NO per-cell mask-based selection of the SIA vs SSA parts, so the numeric parameter sb_model encodes the config choice (0 = sia: ZeroSliding + SIAFD, ubar = 0 and u3 is the SIA profile; 1 = ssa: SSAFD + ConstantInColumn, ubar = u_ssa and u3 = ubar constant in the column; 2 = ssa+sia: SSAFD + SIAFD, ubar = u_ssa and the SIA profile rides on the SSA sliding velocity). The four staggered I(z) columns (SIADiffusivityColumn mounts at the east/west/north/south faces of the cell) drive both the SIA 3D velocity (SIA3DHorizontalVelocity mount, with the sliding velocity coupled from the assembled ubar/vbar) and the SIA diffusivity D (coupled into the SIADiffusiveFlux mount, giving the diffusive flux at the east staggered point); the SSA mount supplies the 2D velocity at the sampled cell (dump cell 29 = esm index 30 of the test-V flow line) through the literal-index coupling transform. The StressBalance assembler then computes, from the assembled 3D velocity field and the eight neighbor-column inputs: the divergence div = u_x + v_y with the mask-limited centered/one-sided stencils of StressBalance::compute_vertical_velocity (u_x = D_x*(west*(u - u_w) + east*(u_e - u)); the west/east/south/north weights are 0 across an ice margin, D_x = 1/(dx*(east+west))); the vertical velocity w3[k] = w3[k-1] - 0.5*dz*(div[k] + div[k-1]) with w3[0] = -bmr (bmr = 0 in all traces; the -bmr base term is deferred to stage 3, matching the leaf SIAVerticalVelocity); the volumetric strain heating sigma[k] = 2*e^(-1/n)*B[k]*D2[k]^(0.5*(1/n+1)) for k <= ks and 0 above, with D2 the strain-rate second invariant under the shallow approximations and B the Paterson-Budd-cold hardness; and the basal frictional heating F_b = 0 on ocean cells -- floating ice (3) or ice-free ocean (4), the mask.ocean skip of ShallowStressBalance::compute_basal_frictional_heating -- and C*(ubar^2 + vbar^2) otherwise, with the purely-plastic drag C = tauc/sqrt(eps^2 + ubar^2 + vbar^2) (basal_resistance.plastic.regularization = 0.01 m/yr = 3.1688764615412797e-10 m/s in the 31556926 s PISM year). Tests: (1) the grounded mid-radius cell (20,15) of the test-F grid, model = 0 -- the full I-chain to u3/v3 to div/w3/sigma assembly and the diffusive flux reproduce the dumped columns to machine precision; (2) the margin cell (27,15) whose east neighbor (28,15) is ice-free (mask 0) -- the one-sided x-stencil (east weight 0, west 1) and theta = 0.5 (BedSmoother trace) at the east staggered point; (3) the floating test-V cell 29, model = 1 -- ubar/u3 equal the SSA steady-state velocity at the sampled cell (rel 2e-3, the SSA leaf's steady-state tolerance story) and F_b = 0 (tauc = 0 on the shelf); (4) model = 2 wiring -- at t = 0 the SSA sits at its exact-solution warm start, so u3[2] = u_ic(30) + the sia-run shear at level 2; (5)-(7) synthetic F_b checks (tauc = 1e5 Pa, v_ssa = 1e-3 m/s) on grounded ice (mask 2: F_b = 100.03317883754333 W/m^2 by the drag formula), on ice-free ocean (mask 4: F_b = 0) and on floating ice (mask 3: F_b = 0 -- the mask.ocean skip covers floating cells too, a case the all-zero stage-1 F_b dumps cannot pin because the ssa run had tauc = 0 on the shelf). HARNESS FINDING (empirical): the coupled document -- top-level model refs + variable_map coupling -- loads, validates, and its inline tests RUN under `esm test` with the native compiler (47/47 pass; mounted components' tests are dropped at the mount per esm-spec 6.6, and the subassembly authors its own). Two native-compiler constraints shaped the equations: an ifelse whose branches have different value boxes (scalar vs indexed) is refused, so the ConstantInColumn selection works through lev-shaped ubar_col/vbar_col boxes; and index maps must be affine or constant selects, so the bed/interior switch of the vertical derivatives u_z/v_z is a makearray region split (the clamped formula is algebraically identical). Coupling limitations (documented per test): the eight neighbor 3D-velocity columns and the staggered-column inputs (thk/ks/E/alpha/theta and the surface gradients) are PARAMETERS here, sampled from the stage-1 dumps; in stage 3 they become full-grid couplings from the neighboring cells' SIA/SSA fields. Consequently the model = 1 (ssa) divergence/vertical-velocity values are NOT asserted (the constant-in-column field would need the neighbor inputs to be the SSA field as well), and in model = 2 the divergence computed with sia-run neighbor inputs carries the sliding-velocity jump across the cell (the D_x*ubar*(west - east) term) -- both deferred to the full-grid assembly. The strain-heating hardness uses the pressure-ADJUSTED temperature T_pa (PatersonBuddCold::softness_from_temp through FlowLaw::hardness_n) while the SIA flow factor of SIAFD::flow_n uses the ABSOLUTE temperature -- a C++ inconsistency of the reference, reproduced faithfully here (both branches verified against the stage-1 dumps; see the eqice bug list). While assembling this subassembly a genuine leaf-fidelity bug was found and fixed in sia.esm (the I(z) cumulative trapezoid above a staggered column's surface drifted by a partial top interval; SIAFD::compute_I fills the levels above the ice with an exact copy of the top in-ice value; the fix caps the I sum at j <= ks; all 48 sia.esm tests unchanged and green). theta (bed smoothness) remains an input (BedSmoother deferred to stage 3), and the SIA diffusive flux is exposed at the east staggered point only (the geometry step consumes all four faces in stage 3).",
+    "license": "GPL-3.0-or-later",
+    "tags": [
+      "eqice:stage2",
+      "pism:stress_balance",
+      "coupling:subassembly"
+    ]
+  },
+  "solver": {
+    "stiffness": "high",
+    "reltol": 1e-10,
+    "abstol": 1e-13
+  },
+  "index_sets": {
+    "lev": {
+      "kind": "interval",
+      "size": 61
+    }
+  },
+  "models": {
+    "SIAEast": {
+      "ref": "./sia.esm",
+      "model": "SIADiffusivityColumn"
+    },
+    "SIAWest": {
+      "ref": "./sia.esm",
+      "model": "SIADiffusivityColumn"
+    },
+    "SIANorth": {
+      "ref": "./sia.esm",
+      "model": "SIADiffusivityColumn"
+    },
+    "SIASouth": {
+      "ref": "./sia.esm",
+      "model": "SIADiffusivityColumn"
+    },
+    "SIAFlux": {
+      "ref": "./sia.esm",
+      "model": "SIADiffusiveFlux"
+    },
+    "SIAVel": {
+      "ref": "./sia.esm",
+      "model": "SIA3DHorizontalVelocity"
+    },
+    "SIAW": {
+      "ref": "./sia.esm",
+      "model": "SIAVerticalVelocity"
+    },
+    "SSA": {
+      "ref": "./ssa.esm",
+      "model": "SSAFlowline"
+    },
+    "StressBalance": {
+      "expression_template_imports": [
+        {
+          "ref": "./stress_balance_templates.esm"
+        },
+        {
+          "ref": "./ice_rheology_templates.esm"
+        },
+        {
+          "ref": "./basal_templates.esm"
+        }
+      ],
+      "variables": {
+        "sb_model": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0,
+          "description": "Stress-balance model selector mirroring the PISM config stress_balance.model (stressbalance/factory.cc): 0 = sia (ZeroSliding + SIAFD), 1 = ssa (SSAFD + ConstantInColumn), 2 = ssa+sia (SSAFD + SIAFD). PISM 2.3.2 has no per-cell mask-based SIA/SSA selection."
+        },
+        "u_ssa": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "SSA 2D velocity at the sampled cell, coupled from the mounted flow line (SSA.u at esm index 30 = dump cell 29)."
+        },
+        "v_ssa": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "SSA 2D velocity y-component at the sampled cell (0 in the flow-line dumps; the synthetic F_b tests set it directly)."
+        },
+        "u3_sia": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0],
+          "description": "SIA 3D velocity x-component (with sliding), coupled from the mounted SIA3DHorizontalVelocity."
+        },
+        "v3_sia": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0],
+          "description": "SIA 3D velocity y-component (with sliding), coupled from the mounted SIA3DHorizontalVelocity."
+        },
+        "w3_sia": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0],
+          "description": "Vertical velocity of the SIA part (trapezoid of -div), coupled from the mounted SIAVerticalVelocity."
+        },
+        "q_x_sia": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 0.0,
+          "description": "SIA diffusive flux x-component at the east staggered point, coupled from the mounted SIADiffusiveFlux."
+        },
+        "q_y_sia": {
+          "type": "parameter",
+          "units": "m^2/s",
+          "default": 0.0,
+          "description": "SIA diffusive flux y-component at the east staggered point, coupled from the mounted SIADiffusiveFlux."
+        },
+        "u3_w": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 1.4093112956384193e-08, 2.562846641319402e-08, 3.497659474269268e-08, 4.2535839345027876e-08, 4.863457152754828e-08, 5.35430974354288e-08, 5.748359299692693e-08, 6.063838707991432e-08, 6.315686073108796e-08, 6.516118785836312e-08, 6.675110682641421e-08, 6.800788215104023e-08, 6.899758993897087e-08, 6.977383919516445e-08, 7.038002298967318e-08, 7.085117821509817e-08, 7.12155198279784e-08, 7.149570467566912e-08, 7.170987094471006e-08, 7.187249165679431e-08, 7.199507425532525e-08, 7.20867329756398e-08, 7.21546562117033e-08, 7.220448734327638e-08, 7.224063435357074e-08, 7.226652094983674e-08, 7.228478971517283e-08, 7.229746599918454e-08, 7.23060897390542e-08, 7.2311821141544e-08, 7.231552510875974e-08, 7.2317838421112e-08, 7.231922297040393e-08, 7.232000773965622e-08, 7.23204217334476e-08, 7.232061965585337e-08, 7.232070179798747e-08, 7.232072932264475e-08, 7.232073575493107e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08, 7.23207365316103e-08],
+          "description": "3D velocity x-component at the west neighbor cell (i-1,j) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "u3_e": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 1.673786494947537e-08, 3.018352619554389e-08, 4.095692290708253e-08, 4.9565745592381204e-08, 5.642507028091172e-08, 6.18736599999012e-08, 6.61874847121053e-08, 6.959092176031879e-08, 7.226602387406132e-08, 7.436017873202871e-08, 7.599243107597363e-08, 7.72586938602741e-08, 7.823603756253675e-08, 7.89862154464698e-08, 7.955855630613647e-08, 7.999233422588852e-08, 8.031870648356908e-08, 8.056229533293656e-08, 8.074247654151743e-08, 8.087442682504785e-08, 8.096997336634291e-08, 8.103828114613687e-08, 8.108640760329181e-08, 8.111974897758479e-08, 8.114239839849177e-08, 8.115743222394457e-08, 8.116713818308109e-08, 8.117319643520958e-08, 8.117682263865972e-08, 8.117888045683051e-08, 8.11799695551127e-08, 8.11804940117784e-08, 8.118071513690072e-08, 8.118079193601021e-08, 8.118081173007274e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08, 8.118081467957793e-08],
+          "description": "3D velocity x-component at the east neighbor cell (i+1,j) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "u3_s": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 1.570499525978082e-08, 2.8390529427833388e-08, 3.8613627443506955e-08, 4.683229940083316e-08, 5.342257471487513e-08, 5.869268816388632e-08, 6.289488236874115e-08, 6.623521710921226e-08, 6.888171333375242e-08, 7.097110700482952e-08, 7.26144435169006e-08, 7.39017060413454e-08, 7.490563970112834e-08, 7.568490703352343e-08, 7.628668797952684e-08, 7.67488189814789e-08, 7.710155011585658e-08, 7.736898606266142e-08, 7.757026571617468e-08, 7.772052603611685e-08, 7.783168803813521e-08, 7.791309638734489e-08, 7.797203868539485e-08, 7.801416605917083e-08, 7.804383292371699e-08, 7.806437068199908e-08, 7.807830753774229e-08, 7.808754444901787e-08, 7.80934954674991e-08, 7.80971992308988e-08, 7.809940715332786e-08, 7.810065284767005e-08, 7.810130647995794e-08, 7.810161706837237e-08, 7.810174517397101e-08, 7.810178796859512e-08, 7.810179818509084e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08, 7.810179946127528e-08],
+          "description": "3D velocity x-component at the south neighbor cell (i,j-1) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "u3_n": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 1.570499525978082e-08, 2.8390529427833388e-08, 3.8613627443506955e-08, 4.6832299400833174e-08, 5.342257471487514e-08, 5.8692688163886325e-08, 6.289488236874116e-08, 6.623521710921228e-08, 6.888171333375243e-08, 7.097110700482953e-08, 7.261444351690061e-08, 7.390170604134541e-08, 7.490563970112836e-08, 7.568490703352343e-08, 7.628668797952685e-08, 7.674881898147891e-08, 7.710155011585659e-08, 7.736898606266143e-08, 7.757026571617469e-08, 7.772052603611686e-08, 7.783168803813522e-08, 7.79130963873449e-08, 7.797203868539488e-08, 7.801416605917086e-08, 7.804383292371699e-08, 7.806437068199908e-08, 7.80783075377423e-08, 7.808754444901789e-08, 7.809349546749911e-08, 7.809719923089881e-08, 7.809940715332788e-08, 7.810065284767006e-08, 7.810130647995795e-08, 7.810161706837239e-08, 7.810174517397102e-08, 7.810178796859513e-08, 7.810179818509085e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08, 7.810179946127529e-08],
+          "description": "3D velocity x-component at the north neighbor cell (i,j+1) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "v3_w": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, -1.550963648536927e-25, -3.101927297073854e-25, -4.1359030627651384e-25, -8.271806125530277e-25, -6.203854594147708e-25, -6.203854594147708e-25, -6.203854594147708e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -1.2407709188295415e-24, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25, -8.271806125530277e-25],
+          "description": "3D velocity y-component at the west neighbor cell (i-1,j) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "v3_e": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 1.0339757656912846e-25, 2.0679515313825692e-25, 3.101927297073854e-25, 4.1359030627651384e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 2.0679515313825692e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 4.1359030627651384e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25, 2.0679515313825692e-25],
+          "description": "3D velocity y-component at the east neighbor cell (i+1,j) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "v3_s": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, -3.1334406813115362e-09, -5.664440625813567e-09, -7.704137395033321e-09, -9.343913056316145e-09, -1.0658792859242804e-08, -1.1710275649317334e-08, -1.254868870931438e-08, -1.3215144921680084e-08, -1.3743167666642544e-08, -1.4160038352926705e-08, -1.4487912618175164e-08, -1.4744743777473938e-08, -1.494504582309374e-08, -1.5100523002303593e-08, -1.5220588566789098e-08, -1.5312791564704067e-08, -1.5383167422956204e-08, -1.5436525448496334e-08, -1.547668418331002e-08, -1.550666371106742e-08, -1.552884247704953e-08, -1.554508489900948e-08, -1.555684497454953e-08, -1.5565250196269162e-08, -1.5571169340623237e-08, -1.557526707592748e-08, -1.557804781891058e-08, -1.5579890840530476e-08, -1.558107826607659e-08, -1.5581817319807207e-08, -1.5582257920403258e-08, -1.558250653187615e-08, -1.5582637008145927e-08, -1.5582699032363615e-08, -1.558272463922003e-08, -1.5582733216323373e-08, -1.5582735286692144e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08, -1.558273556887382e-08],
+          "description": "3D velocity y-component at the south neighbor cell (i,j-1) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "v3_n": {
+          "type": "parameter",
+          "units": "m/s",
+          "shape": ["lev"],
+          "default": [0.0, 3.1334406813115367e-09, 5.664440625813567e-09, 7.704137395033323e-09, 9.343913056316146e-09, 1.0658792859242808e-08, 1.1710275649317336e-08, 1.2548688709314382e-08, 1.3215144921680086e-08, 1.3743167666642547e-08, 1.4160038352926708e-08, 1.4487912618175165e-08, 1.4744743777473941e-08, 1.4945045823093742e-08, 1.5100523002303596e-08, 1.5220588566789098e-08, 1.531279156470407e-08, 1.5383167422956204e-08, 1.5436525448496334e-08, 1.547668418331002e-08, 1.550666371106742e-08, 1.5528842477049534e-08, 1.554508489900948e-08, 1.555684497454953e-08, 1.5565250196269165e-08, 1.557116934062324e-08, 1.5575267075927482e-08, 1.5578047818910584e-08, 1.557989084053048e-08, 1.558107826607659e-08, 1.558181731980721e-08, 1.558225792040326e-08, 1.558250653187615e-08, 1.558263700814593e-08, 1.5582699032363615e-08, 1.558272463922003e-08, 1.5582733216323373e-08, 1.5582735286692148e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08, 1.5582735568873822e-08],
+          "description": "3D velocity y-component at the north neighbor cell (i,j+1) -- a stage-1 dump sample; full-grid coupling deferred to stage 3."
+        },
+        "E": {
+          "type": "parameter",
+          "units": "J/kg",
+          "shape": ["lev"],
+          "default": [95256.63585702112, 92591.104821456, 89951.58864768212, 87337.70833813651, 84749.09222158075, 82185.37577692242, 79646.20146209707, 77131.21854783985, 74640.08295618689, 72172.4571035484, 69728.0097482037, 67306.41584207404, 64907.3563866336, 62530.518292823595, 60175.59424484164, 57842.28256768157, 55530.287098302855, 53239.317060315385, 50969.086942067785, 48719.31637803075, 46489.73003337417, 44280.05749163663, 42090.03314539062, 39919.39608981257, 37767.89001906639, 35635.2631254145, 33521.26800097355, 31425.661542033624, 29348.204855863474, 27288.663169926807, 25246.805743437337, 23222.40578118188, 21215.240349544914, 19225.090294668717, 17251.74016268564, 15294.978121962535, 13354.5958872977, 11430.388646012982, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346, 9740.409677419346],
+          "description": "Ice enthalpy at the cell center (stage1/dumps/sia/columns.csv column E)."
+        },
+        "H": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2525.6801843981348,
+          "description": "Ice thickness at the cell center (columns.csv column H)."
+        },
+        "ks": {
+          "type": "parameter",
+          "units": "1",
+          "default": 37.0,
+          "description": "Top in-ice level index (0-based), kBelowHeight(H): sigma is computed for k <= ks and is 0 above."
+        },
+        "z": {
+          "type": "parameter",
+          "units": "m",
+          "shape": ["lev"],
+          "default": [0.0, 66.66666666666667, 133.33333333333334, 200.0, 266.6666666666667, 333.33333333333337, 400.0, 466.6666666666667, 533.3333333333334, 600.0, 666.6666666666667, 733.3333333333334, 800.0, 866.6666666666667, 933.3333333333334, 1000.0000000000001, 1066.6666666666667, 1133.3333333333335, 1200.0, 1266.6666666666667, 1333.3333333333335, 1400.0, 1466.6666666666667, 1533.3333333333335, 1600.0, 1666.6666666666667, 1733.3333333333335, 1800.0000000000002, 1866.6666666666667, 1933.3333333333335, 2000.0000000000002, 2066.666666666667, 2133.3333333333335, 2200.0, 2266.666666666667, 2333.3333333333335, 2400.0, 2466.666666666667, 2533.3333333333335, 2600.0, 2666.666666666667, 2733.3333333333335, 2800.0, 2866.666666666667, 2933.3333333333335, 3000.0, 3066.666666666667, 3133.3333333333335, 3200.0, 3266.666666666667, 3333.3333333333335, 3400.0000000000005, 3466.666666666667, 3533.3333333333335, 3600.0000000000005, 3666.666666666667, 3733.3333333333335, 3800.0000000000005, 3866.666666666667, 3933.3333333333335, 4000.0000000000005],
+          "description": "level heights (level k at index k+1)"
+        },
+        "mask_c": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Cell mask at the center: 0 ice-free bedrock, 2 grounded, 3 floating, 4 ice-free ocean (util/Mask.hh)."
+        },
+        "mask_w": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Cell mask at the west neighbor (i-1,j)."
+        },
+        "mask_e": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Cell mask at the east neighbor (i+1,j)."
+        },
+        "mask_s": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Cell mask at the south neighbor (i,j-1)."
+        },
+        "mask_n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "Cell mask at the north neighbor (i,j+1)."
+        },
+        "tauc": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 9791107.780015495,
+          "description": "Basal yield stress (the MohrCoulomb till tauc of stage1/dumps/basal_strength/tauc_map.csv at the test cells; 0 on the floating test-V shelf)."
+        },
+        "eps": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.1688764615412797e-10,
+          "description": "Regularization speed of the purely-plastic basal drag: basal_resistance.plastic.regularization = 0.01 m/yr in the 31556926 s PISM year."
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "m",
+          "default": 58064.516129032258,
+          "description": "Grid spacing of the instrumented test-F run (1800 km / 31 cells)."
+        },
+        "dy": {
+          "type": "parameter",
+          "units": "m",
+          "default": 58064.516129032258,
+          "description": "Grid spacing of the instrumented test-F run (1800 km / 31 cells)."
+        },
+        "bmr": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 0.0,
+          "description": "Basal melt rate: w3[0] = -bmr in the C++ (geometry.update.use_basal_melt_rate). All stage-1 traces have bmr = 0; the nonzero branch is deferred to stage 3."
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0,
+          "description": "Glen exponent (stress_balance.sia.Glen_exponent)."
+        },
+        "e_factor": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "Flow enhancement factor (stress_balance.sia.enhancement_factor)."
+        },
+        "A_cold": {
+          "type": "parameter",
+          "units": "Pa^-3/s",
+          "default": 3.61e-13,
+          "description": "Paterson-Budd cold softness prefactor (flow_law.arr.paterson_budd_cold.A_cold)."
+        },
+        "Q_cold": {
+          "type": "parameter",
+          "units": "J/mol",
+          "default": 60000.0,
+          "description": "Paterson-Budd cold activation energy (flow_law.arr.paterson_budd_cold.Q_cold)."
+        },
+        "R_ideal_gas": {
+          "type": "parameter",
+          "units": "J/(mol K)",
+          "default": 8.31441,
+          "description": "Ideal gas constant."
+        },
+        "c_ice": {
+          "type": "parameter",
+          "units": "J/(kg K)",
+          "default": 2009.0,
+          "description": "Specific heat capacity of ice (constants.ice.specific_heat_capacity)."
+        },
+        "T_0": {
+          "type": "parameter",
+          "units": "K",
+          "default": 223.15,
+          "description": "Reference temperature of the enthalpy converter (enthalpy_converter.T_reference)."
+        },
+        "T_melting": {
+          "type": "parameter",
+          "units": "K",
+          "default": 273.15,
+          "description": "Fresh-water melting point temperature (constants.fresh_water.melting_point_temperature)."
+        },
+        "beta_Clausius_Clapeyron": {
+          "type": "parameter",
+          "units": "K/Pa",
+          "default": 7.9e-08,
+          "description": "Clausius-Clapeyron gradient (constants.ice.beta_Clausius_Clapeyron)."
+        },
+        "rho_ice": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 910.0,
+          "description": "Ice density (constants.ice.density)."
+        },
+        "g": {
+          "type": "parameter",
+          "units": "m/s^2",
+          "default": 9.81,
+          "description": "Standard gravity (constants.standard_gravity)."
+        },
+        "west": {
+          "type": "unknown",
+          "units": "1",
+          "description": "x-derivative stencil weight on the west side (0 across an ice margin)."
+        },
+        "east": {
+          "type": "unknown",
+          "units": "1",
+          "description": "x-derivative stencil weight on the east side (0 across an ice margin)."
+        },
+        "south": {
+          "type": "unknown",
+          "units": "1",
+          "description": "y-derivative stencil weight on the south side (0 across an ice margin)."
+        },
+        "north": {
+          "type": "unknown",
+          "units": "1",
+          "description": "y-derivative stencil weight on the north side (0 across an ice margin)."
+        },
+        "ubar": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Assembled 2D (basal) velocity x-component: 0 for model = sia, the SSA velocity otherwise."
+        },
+        "vbar": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Assembled 2D (basal) velocity y-component: 0 for model = sia, v_ssa otherwise."
+        },
+        "vbar_col": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "The assembled 2D velocity y-component repeated over the column (the ConstantInColumn velocity box)."
+        },
+        "ubar_col": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "The assembled 2D velocity x-component repeated over the column (ConstantInColumn's constant-in-column velocity; a lev-shaped box for the u3 selection ifelse, which the native compiler requires both branches to share)."
+        },
+        "u3": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "Assembled 3D velocity x-component: the SIA profile for models sia/ssa+sia, ubar constant in the column for model ssa (ConstantInColumn)."
+        },
+        "v3": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "Assembled 3D velocity y-component: the SIA profile for models sia/ssa+sia, vbar constant in the column for model ssa."
+        },
+        "u_x": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "Mask-limited x-derivative of the assembled u3 at each level (StressBalance::compute_vertical_velocity / compute_volumetric_strain_heating)."
+        },
+        "u_y": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "Mask-limited y-derivative of the assembled u3 at each level."
+        },
+        "v_x": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "Mask-limited x-derivative of the assembled v3 at each level."
+        },
+        "v_y": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "Mask-limited y-derivative of the assembled v3 at each level."
+        },
+        "u_z": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "Vertical derivative of the assembled u3 (centered for k > 0, one-sided at the bed); computed for k <= ks only."
+        },
+        "v_z": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "Vertical derivative of the assembled v3 (centered for k > 0, one-sided at the bed); computed for k <= ks only."
+        },
+        "div": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": ["lev"],
+          "description": "Horizontal divergence u_x + v_y of the assembled 3D velocity at each level (the C++ u_x_plus_v_y)."
+        },
+        "pressure": {
+          "type": "unknown",
+          "units": "Pa",
+          "shape": ["lev"],
+          "description": "Hydrostatic ice pressure rho_ice*g*max(H - z, 0) at each level (EnthalpyConverter::pressure; the strain-heating hardness argument)."
+        },
+        "sigma": {
+          "type": "unknown",
+          "units": "W/m^3",
+          "shape": ["lev"],
+          "description": "Volumetric strain heating: sigma[k] = 2*e^(-1/n)*B[k]*D2[k]^(0.5*(1/n+1)) for k <= ks, 0 above (StressBalance::compute_volumetric_strain_heating)."
+        },
+        "F_b": {
+          "type": "unknown",
+          "units": "W/m^2",
+          "description": "Basal frictional heating: F_b = C*(ubar^2 + vbar^2) with the purely-plastic drag C = tauc/sqrt(eps^2 + ubar^2 + vbar^2), 0 on ocean cells -- floating ice or ice-free ocean, the mask.ocean(i,j) skip of ShallowStressBalance::compute_basal_frictional_heating."
+        },
+        "w3": {
+          "type": "unknown",
+          "units": "m/s",
+          "shape": ["lev"],
+          "description": "Assembled vertical velocity relative to the bed: w3[0] = -bmr, w3[k] = w3[k-1] - 0.5*dz*(div[k] + div[k-1]) -- computed by the mounted SIAVerticalVelocity from the assembled div and coupled back."
+        },
+        "q_x": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "description": "SIA diffusive flux x-component at the east staggered point (the assembled interface output, q_x = q_x_sia; the geometry step consumes all four faces in stage 3)."
+        },
+        "q_y": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "description": "SIA diffusive flux y-component at the east staggered point (q_y = q_y_sia)."
+        }
+      },
+      "equations": [
+        {
+          "_comment": "x-derivative stencil weights: 0 across an ice margin, 1 otherwise (StressBalance::compute_vertical_velocity and compute_volumetric_strain_heating).",
+          "lhs": "west",
+          "rhs": {
+            "op": "sb_mask_weight",
+            "args": ["mask_c", "mask_w"]
+          }
+        },
+        {
+          "lhs": "east",
+          "rhs": {
+            "op": "sb_mask_weight",
+            "args": ["mask_c", "mask_e"]
+          }
+        },
+        {
+          "lhs": "south",
+          "rhs": {
+            "op": "sb_mask_weight",
+            "args": ["mask_c", "mask_s"]
+          }
+        },
+        {
+          "lhs": "north",
+          "rhs": {
+            "op": "sb_mask_weight",
+            "args": ["mask_c", "mask_n"]
+          }
+        },
+        {
+          "_comment": "2D velocity selection: model = sia gives ubar = 0 (ZeroSliding); models ssa/ssa+sia give the SSA velocity.",
+          "lhs": "ubar",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              { "op": "==", "args": ["sb_model", 0] },
+              0.0,
+              "u_ssa"
+            ]
+          }
+        },
+        {
+          "lhs": "vbar",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              { "op": "==", "args": ["sb_model", 0] },
+              0.0,
+              "v_ssa"
+            ]
+          }
+        },
+        {
+          "_comment": "ubar_col[i] = ubar at every level (the ConstantInColumn velocity box).",
+          "lhs": "ubar_col",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": "ubar"
+          }
+        },
+        {
+          "_comment": "3D velocity selection: model = ssa gives the constant-in-column velocity (ConstantInColumn); models sia/ssa+sia give the SIA profile with sliding.",
+          "lhs": "u3",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                { "op": "==", "args": ["sb_model", 1] },
+                { "op": "index", "args": ["ubar_col", "i"] },
+                { "op": "index", "args": ["u3_sia", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "vbar_col[i] = vbar at every level (the ConstantInColumn velocity box).",
+          "lhs": "vbar_col",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": "vbar"
+          }
+        },
+        {
+          "lhs": "v3",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "ifelse",
+              "args": [
+                { "op": "==", "args": ["sb_model", 1] },
+                { "op": "index", "args": ["vbar_col", "i"] },
+                { "op": "index", "args": ["v3_sia", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "u_x = D_x*(west*(u3 - u3_w) + east*(u3_e - u3)) at each level (the C++ u_x of compute_vertical_velocity / compute_volumetric_strain_heating).",
+          "lhs": "u_x",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sb_derivative_x",
+              "args": [
+                "west",
+                "east",
+                "dx",
+                { "op": "index", "args": ["u3", "i"] },
+                { "op": "index", "args": ["u3_w", "i"] },
+                { "op": "index", "args": ["u3_e", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "v_y = D_y*(south*(v3 - v3_s) + north*(v3_n - v3)) at each level.",
+          "lhs": "v_y",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sb_derivative_y",
+              "args": [
+                "south",
+                "north",
+                "dy",
+                { "op": "index", "args": ["v3", "i"] },
+                { "op": "index", "args": ["v3_s", "i"] },
+                { "op": "index", "args": ["v3_n", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "u_y = D_y*(south*(u3 - u3_s) + north*(u3_n - u3)) at each level (the strain-heating cross derivative).",
+          "lhs": "u_y",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sb_derivative_y",
+              "args": [
+                "south",
+                "north",
+                "dy",
+                { "op": "index", "args": ["u3", "i"] },
+                { "op": "index", "args": ["u3_s", "i"] },
+                { "op": "index", "args": ["u3_n", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "v_x = D_x*(west*(v3 - v3_w) + east*(v3_e - v3)) at each level (the strain-heating cross derivative).",
+          "lhs": "v_x",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "sb_derivative_x",
+              "args": [
+                "west",
+                "east",
+                "dx",
+                { "op": "index", "args": ["v3", "i"] },
+                { "op": "index", "args": ["v3_w", "i"] },
+                { "op": "index", "args": ["v3_e", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "u_z: centered (u3[i+1]-u3[i-1])/(z[i+1]-z[i-1]) in the interior, the C++ one-sided bed difference (u3[2]-u3[1])/(z[2]-z[1]) at i = 1 (StressBalance::compute_volumetric_strain_heating: dz = z[k+1]-z[k-1] for k > 0, dz = z[1]-z[0] at k = 0); computed for k <= ks only (the faq filter; the C++ k-loop reads u[ks+1] with ks <= Mz-2 for H < Lz, so the [1,60] ranges keep every index in bounds). The bed/interior switch is a makearray region split because the native compiler's index analysis admits only affine index maps (u3[i+1], u3[i-1]) or constant selects (u3[1], u3[2]).",
+          "lhs": "u_z",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [[1, 1]],
+              [[2, 60]]
+            ],
+            "values": [
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": ["i"],
+                "ranges": { "i": [1, 1] },
+                "filter": { "op": "<=", "args": ["i", { "op": "+", "args": ["ks", 1] }] },
+                "expr": {
+                  "op": "/",
+                  "args": [
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["u3", 2] },
+                      { "op": "index", "args": ["u3", 1] } ] },
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["z", 2] },
+                      { "op": "index", "args": ["z", 1] } ] }
+                  ]
+                }
+              },
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": ["i"],
+                "ranges": { "i": [2, 60] },
+                "filter": { "op": "<=", "args": ["i", { "op": "+", "args": ["ks", 1] }] },
+                "expr": {
+                  "op": "/",
+                  "args": [
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["u3", { "op": "+", "args": ["i", 1] }] },
+                      { "op": "index", "args": ["u3", { "op": "-", "args": ["i", 1] }] } ] },
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["z", { "op": "+", "args": ["i", 1] }] },
+                      { "op": "index", "args": ["z", { "op": "-", "args": ["i", 1] }] } ] }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "v_z: the v3 analogue of u_z (the same makearray bed/interior region split).",
+          "lhs": "v_z",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [[1, 1]],
+              [[2, 60]]
+            ],
+            "values": [
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": ["i"],
+                "ranges": { "i": [1, 1] },
+                "filter": { "op": "<=", "args": ["i", { "op": "+", "args": ["ks", 1] }] },
+                "expr": {
+                  "op": "/",
+                  "args": [
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["v3", 2] },
+                      { "op": "index", "args": ["v3", 1] } ] },
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["z", 2] },
+                      { "op": "index", "args": ["z", 1] } ] }
+                  ]
+                }
+              },
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": ["i"],
+                "ranges": { "i": [2, 60] },
+                "filter": { "op": "<=", "args": ["i", { "op": "+", "args": ["ks", 1] }] },
+                "expr": {
+                  "op": "/",
+                  "args": [
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["v3", { "op": "+", "args": ["i", 1] }] },
+                      { "op": "index", "args": ["v3", { "op": "-", "args": ["i", 1] }] } ] },
+                    { "op": "-", "args": [
+                      { "op": "index", "args": ["z", { "op": "+", "args": ["i", 1] }] },
+                      { "op": "index", "args": ["z", { "op": "-", "args": ["i", 1] }] } ] }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "_comment": "Horizontal divergence u_x + v_y at each level (the C++ u_x_plus_v_y of compute_vertical_velocity).",
+          "lhs": "div",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["u_x", "i"] },
+                { "op": "index", "args": ["v_y", "i"] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Hydrostatic ice pressure rho_ice*g*max(H - z, 0) at each level (EnthalpyConverter::pressure, the strain-heating hardness argument).",
+          "lhs": "pressure",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "expr": {
+              "op": "*",
+              "args": [
+                "rho_ice",
+                "g",
+                { "op": "max", "args": [{ "op": "-", "args": ["H", { "op": "index", "args": ["z", "i"] }] }, 0.0] }
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Volumetric strain heating sigma[k] = 2*e^(-1/n)*B[k]*D2[k]^(0.5*(1/n+1)) for k <= ks, 0 above (the filter leaves the out-of-filter levels at 0, matching the C++ zeroing of the levels above ks; StressBalance::compute_volumetric_strain_heating).",
+          "lhs": "sigma",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["i"],
+            "ranges": { "i": { "from": "lev" } },
+            "filter": { "op": "<=", "args": ["i", { "op": "+", "args": ["ks", 1] }] },
+            "expr": {
+              "op": "sb_strain_heating",
+              "args": [
+                "e_factor",
+                {
+                  "op": "sb_hardness_arr",
+                  "args": [
+                    { "op": "index", "args": ["E", "i"] },
+                    { "op": "index", "args": ["pressure", "i"] }
+                  ]
+                },
+                {
+                  "op": "sb_D2",
+                  "args": [
+                    { "op": "index", "args": ["u_x", "i"] },
+                    { "op": "index", "args": ["u_y", "i"] },
+                    { "op": "index", "args": ["u_z", "i"] },
+                    { "op": "index", "args": ["v_x", "i"] },
+                    { "op": "index", "args": ["v_y", "i"] },
+                    { "op": "index", "args": ["v_z", "i"] }
+                  ]
+                },
+                "n"
+              ]
+            }
+          }
+        },
+        {
+          "_comment": "Basal frictional heating F_b = ifelse(mask_c in {3,4}, 0, C*(ubar^2 + vbar^2)) with the purely-plastic drag C (ShallowStressBalance::compute_basal_frictional_heating; mask.ocean = floating or ice-free ocean).",
+          "lhs": "F_b",
+          "rhs": {
+            "op": "sb_basal_frictional_heating",
+            "args": ["mask_c", "tauc", "eps", "ubar", "vbar"]
+          }
+        },
+        {
+          "_comment": "Vertical velocity from incompressibility: computed by the mounted SIAVerticalVelocity from the assembled div and coupled back in as w3_sia.",
+          "lhs": "w3",
+          "rhs": "w3_sia"
+        },
+        {
+          "_comment": "SIA diffusive flux pass-throughs (the assembled interface outputs).",
+          "lhs": "q_x",
+          "rhs": "q_x_sia"
+        },
+        {
+          "lhs": "q_y",
+          "rhs": "q_y_sia"
+        }
+      ],
+      "tests": [
+        {
+          "id": "sia_cell_20_15",
+          "description": "Model = sia (sb_model 0) at the grounded mid-radius cell (20,15) of the test-F grid: the four mounted I(z) columns (staggered points (20,15,0), (19,15,0), (20,15,1), (20,14,1)) drive the SIA 3D velocity, whose assembled field (sliding = 0) feeds the divergence, the vertical velocity and the strain heating; the D chain feeds the diffusive flux at the east staggered point; F_b = 0 with tauc(20,15) = 9791107.7800154947 Pa. All asserted values are stage1/dumps/sia columns at cell (20,15) (columns.csv u3/v3/w3/sigma3; diffusive_flux.csv q at (20,15,0)).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "SIAEast.thk": 2454.7418119333006,
+            "SIAEast.ks": 36.0,
+            "SIAEast.E": [94164.0188116336, 91498.51415598279, 88859.07609257314, 86245.32411350089, 83656.88508099734, 81093.39304984597, 78554.4890949101, 76039.82114359864, 73549.04381310804, 71081.81825228073, 68637.81198792823, 66216.69877547336, 63818.15845376988, 61441.87680396375, 59087.54541226571, 56754.86153650997, 54443.52797637572, 52153.25294715693, 49883.7499569667, 47634.73768726697, 45405.93987662044, 43197.08520756334, 41007.90719650018, 38838.144086529384, 36687.538743107245, 34555.83855246317, 32442.795322682694, 30348.1651873762, 28271.708511855104, 26213.189801739365, 24172.37761392407, 22149.044469832726, 20142.96677089092, 18153.924716152687, 16181.702222016918, 14226.086843971898, 12521.543750100458, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIAEast.alpha": 0.002443432829344296,
+            "SIAEast.theta": 1.0,
+            "SIAWest.thk": 2589.1490915821087,
+            "SIAWest.ks": 38.0,
+            "SIAWest.E": [96101.93426566327, 93436.38296575425, 90796.80678690792, 88182.82788777362, 85594.07571990372, 83030.18685264295, 80490.80480303994, 77975.579870612, 75484.16897680395, 73016.23550898567, 70571.44916883788, 68149.48582498592, 65750.0273697404, 63372.761579812824, 61017.3819808789, 58683.58771586505, 56371.08341683936, 54079.57908039299, 51808.789946401535, 49558.4363800586, 47328.243757081145, 45117.94235198597, 42927.267229341815, 40755.958137906506, 38603.7594075589, 36470.419848939884, 34355.6926557209, 32259.335309419006, 30181.109486681584, 28120.78096896653, 26078.11955454634, 24052.898972765295, 22044.896800484585, 20053.894380648955, 18079.676742912936, 16122.032526266605, 14180.75390360121, 12255.636508159107, 10455.606707579194, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIAWest.alpha": 0.00218615124744799,
+            "SIAWest.theta": 1.0,
+            "SIANorth.thk": 2519.0001549062827,
+            "SIANorth.ks": 37.0,
+            "SIANorth.E": [95159.96012950611, 92494.43141954488, 89854.9221319991, 87241.05313639334, 84652.45263242486, 82088.75597366251, 79549.60549630948, 77034.65035286076, 74543.54635049377, 72075.95579403512, 69631.54733335282, 67209.99581502978, 64810.98213817933, 62434.1931142666, 60079.321330809005, 57746.065018829846, 55434.12792394453, 53143.21918096511, 50873.053191910934, 48623.34950731724, 46393.83271073963, 44184.23230635382, 41994.28260955313, 39823.72264045323, 37672.29602021241, 35539.75087008164, 33425.839713101144, 31330.319378362557, 29252.950907758837, 27193.49946514717, 25151.73424785235, 23127.428400439734, 21120.35893069153, 19130.306627719958, 17157.0559821543, 15200.395108341409, 13260.115668500006, 11336.012798771822, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIANorth.alpha": 0.0023159308350506115,
+            "SIANorth.theta": 1.0,
+            "SIASouth.thk": 2519.0001549062827,
+            "SIASouth.ks": 37.0,
+            "SIASouth.E": [95159.96012950611, 92494.43141954488, 89854.9221319991, 87241.05313639334, 84652.45263242486, 82088.75597366251, 79549.60549630948, 77034.65035286076, 74543.54635049377, 72075.95579403512, 69631.54733335282, 67209.99581502978, 64810.98213817933, 62434.1931142666, 60079.321330809005, 57746.065018829846, 55434.12792394453, 53143.21918096511, 50873.053191910934, 48623.34950731724, 46393.83271073963, 44184.23230635382, 41994.28260955313, 39823.72264045323, 37672.29602021241, 35539.75087008164, 33425.839713101144, 31330.319378362557, 29252.950907758837, 27193.49946514717, 25151.73424785235, 23127.428400439734, 21120.35893069153, 19130.306627719958, 17157.0559821543, 15200.395108341409, 13260.115668500006, 11336.012798771822, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIASouth.alpha": 0.0023159308350506115,
+            "SIASouth.theta": 1.0,
+            "SIAVel.h_x_e": -0.002443432829344296,
+            "SIAVel.h_y_e": 0.0,
+            "SIAVel.h_x_w": -0.00218615124744799,
+            "SIAVel.h_y_w": 0.0,
+            "SIAVel.h_x_n": -0.002304472666031095,
+            "SIAVel.h_y_n": -0.00023008990471935046,
+            "SIAVel.h_x_s": -0.002304472666031095,
+            "SIAVel.h_y_s": 0.00023008990471935046,
+            "SIAFlux.h_x": -0.002443432829344296,
+            "SIAFlux.h_y": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "ubar", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "vbar", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "q_x", "time": 0.0, "expected": 0.00017722213606189292,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "q_y", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 1.590229711241452e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 11 },
+              "expected": 7.19832337322015e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 21 },
+              "expected": 7.888346115374059e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 38 },
+              "expected": 7.928006008508114e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "v3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 0.0, "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": -2.557968833584646e-12, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 11 },
+              "expected": -1.4770939357116773e-10, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 21 },
+              "expected": -3.735777828503232e-10, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 38 },
+              "expected": -7.642754295794437e-10, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 61 },
+              "expected": -1.2927609373182127e-09, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 1.0330785797751403e-05, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 11 },
+              "expected": 1.0435456649330859e-06, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 21 },
+              "expected": 5.118096285120128e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 38 },
+              "expected": 2.193995120085242e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 39 },
+              "expected": 0.0, "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "F_b", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "sia_margin_27_15",
+          "description": "Model = sia at the margin cell (27,15): the east neighbor (28,15) is ice-free (mask 0), so the x-derivative stencil is one-sided (east weight 0, west 1; D_x = 1/dx) -- the C++ margin switch of StressBalance::compute_vertical_velocity. The east staggered point (27,15,0) carries the BedSmoother trace theta = 0.5; the other three staggered points have theta = 1. Asserted values are the stage1/dumps/sia columns at cell (27,15) and at the staggered point (27,15,0).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "SIAEast.thk": 458.38063881090636,
+            "SIAEast.ks": 6.0,
+            "SIAEast.E": [28856.493060159737, 27524.21226768723, 26205.8887885037, 24901.30443494467, 23610.24554352836, 22332.50285829762, 21067.87141775333, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIAEast.alpha": 0.01578866644793122,
+            "SIAEast.theta": 0.5,
+            "SIAWest.thk": 1114.4790077960474,
+            "SIAWest.ks": 16.0,
+            "SIAWest.E": [63495.861789578164, 60831.14342334738, 58194.03260156708, 55584.102444717035, 53000.93483000972, 50444.12016797146, 47913.25718583031, 45407.95271746877, 42927.82149971201, 40472.48597472882, 38041.576098331934, 35634.72915397442, 33251.58957224488, 30891.808755672348, 28843.973839949147, 27685.088438331506, 26537.280889201622, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIAWest.alpha": 0.006810277372668088,
+            "SIAWest.theta": 1.0,
+            "SIANorth.thk": 906.4518168339848,
+            "SIANorth.ks": 13.0,
+            "SIANorth.E": [57391.60509408277, 54727.05243156869, 52090.43186734497, 49481.30647945733, 46899.24841129995, 44343.83863771643, 41814.66673830593, 39311.3306776754, 36833.436592392914, 34380.59858440334, 31952.438520679323, 29548.585838889365, 27168.677358872977, 24812.357099721332, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIANorth.alpha": 0.011240233694763627,
+            "SIANorth.theta": 1.0,
+            "SIASouth.thk": 906.4518168339848,
+            "SIASouth.ks": 13.0,
+            "SIASouth.E": [57391.60509408277, 54727.05243156869, 52090.43186734497, 49481.30647945733, 46899.24841129995, 44343.83863771643, 41814.66673830593, 39311.3306776754, 36833.436592392914, 34380.59858440334, 31952.438520679323, 29548.585838889365, 27168.677358872977, 24812.357099721332, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIASouth.alpha": 0.011240233694763627,
+            "SIASouth.theta": 1.0,
+            "SIAVel.h_x_e": -0.01578866644793122,
+            "SIAVel.h_y_e": 0.0,
+            "SIAVel.h_x_w": -0.006810277372668088,
+            "SIAVel.h_y_w": 0.0,
+            "SIAVel.h_x_n": -0.011234623042679796,
+            "SIAVel.h_y_n": -0.0003551036493585166,
+            "SIAVel.h_x_s": -0.011234623042679796,
+            "SIAVel.h_y_s": 0.0003551036493585166,
+            "SIAFlux.h_x": -0.01578866644793122,
+            "SIAFlux.h_y": 0.0,
+            "StressBalance.H": 916.7612776218127,
+            "StressBalance.ks": 13.0,
+            "StressBalance.E": [57712.986120319474, 55048.42453537446, 52411.7775770074, 49802.60886988934, 47220.49108705672, 44665.00571659524, 42135.74283550666, 39632.30089050007, 37154.28648546406, 34701.31417538125, 32273.00626645953, 29868.99262226206, 27488.9104756276, 25132.404246179172, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643, 23376.98322580643],
+            "StressBalance.mask_e": 0.0,
+            "StressBalance.tauc": 90205.61343351883,
+            "StressBalance.u3_w": [0.0, 8.804427876240535e-09, 1.528637997502577e-08, 2.001625081442341e-08, 2.343360641369056e-08, 2.587540201929144e-08, 2.759842462736028e-08, 2.879709163361724e-08, 2.9617523256463072e-08, 3.016863184198285e-08, 3.053082878078135e-08, 3.0762833776962675e-08, 3.090697685192492e-08, 3.099330682045925e-08, 3.10427671625195e-08, 3.106960444816989e-08, 3.108320209951564e-08, 3.108950218158518e-08, 3.109210417007984e-08, 3.109302275600267e-08, 3.109328679209387e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08, 3.109334372626354e-08],
+            "StressBalance.u3_e": [0.0, 8.142516004190604e-11, 1.2666696234181008e-10, 1.4943337528184443e-10, 1.5932580829813742e-10, 1.627167624319617e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10, 1.6347098151416696e-10],
+            "StressBalance.u3_s": [0.0, 6.348063156601781e-09, 1.0675001448705017e-08, 1.356971686901129e-08, 1.5464771130126773e-08, 1.6674293200108518e-08, 1.7423342020466685e-08, 1.787051173877497e-08, 1.8125573600902774e-08, 1.8262860264291254e-08, 1.8331526838424425e-08, 1.836285765076911e-08, 1.837569826145989e-08, 1.8380373412589007e-08, 1.8381977893468645e-08, 1.8382443576912735e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08, 1.8382520814963452e-08],
+            "StressBalance.u3_n": [0.0, 6.348063156601779e-09, 1.0675001448705015e-08, 1.3569716869011289e-08, 1.546477113012677e-08, 1.6674293200108515e-08, 1.7423342020466685e-08, 1.787051173877497e-08, 1.8125573600902768e-08, 1.826286026429125e-08, 1.8331526838424422e-08, 1.8362857650769108e-08, 1.8375698261459882e-08, 1.8380373412589e-08, 1.838197789346864e-08, 1.8382443576912735e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08, 1.838252081496345e-08],
+            "StressBalance.v3_w": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "StressBalance.v3_e": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "StressBalance.v3_s": [0.0, -4.3448064170644836e-10, -7.315809002803578e-10, -9.310881799449587e-10, -1.062267425745598e-09, -1.1464138974173165e-09, -1.1988293402453406e-09, -1.2303437804623745e-09, -1.2484890920443452e-09, -1.2583915264519188e-09, -1.2634501204216385e-09, -1.2658365387824258e-09, -1.266866874943959e-09, -1.2672674232577416e-09, -1.267413870192718e-09, -1.2674563748519642e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09, -1.2674634246560063e-09],
+            "StressBalance.v3_n": [0.0, 4.3448064170644826e-10, 7.315809002803577e-10, 9.310881799449585e-10, 1.0622674257455978e-09, 1.146413897417316e-09, 1.1988293402453404e-09, 1.2303437804623745e-09, 1.248489092044345e-09, 1.2583915264519186e-09, 1.2634501204216383e-09, 1.2658365387824254e-09, 1.2668668749439585e-09, 1.2672674232577414e-09, 1.2674138701927177e-09, 1.267456374851964e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09, 1.2674634246560061e-09]
+          },
+          "assertions": [
+            {
+              "variable": "ubar", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "q_x", "time": 0.0, "expected": 2.480941950092306e-07,
+              "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "q_y", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 7.08076054868873e-09, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 11 },
+              "expected": 2.0625952241331724e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 14 },
+              "expected": 2.06860175444939e-08, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "v3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 0.0, "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 7.400886529852978e-13, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 11 },
+              "expected": 6.185776429090282e-11, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 14 },
+              "expected": 9.24369791217026e-11, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "w3", "time": 0.0, "coords": { "lev": 61 },
+              "expected": 5.853438907035654e-10, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 6.439678969115598e-06, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 14 },
+              "expected": 7.173593975119585e-09, "tolerance": { "rel": 1e-12 }
+            },
+            {
+              "variable": "sigma", "time": 0.0, "coords": { "lev": 15 },
+              "expected": 0.0, "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "F_b", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "ssa_steady_ubar",
+          "description": "Model = ssa (sb_model 1) on the floating test-V shelf: the assembled 2D velocity equals the SSA velocity at the sampled cell (dump cell 29, esm index 30) at the pseudo-transient steady state of the mounted flow line (stage1/dumps/ssa/columns.csv u = 2.5784930700498497e-05; the SSA leaf's steady-state tolerance story, rel 2e-3), the assembled 3D velocity is constant in the column (ConstantInColumn), and F_b = 0 because tauc = 0 on the floating shelf (the plastic drag vanishes).",
+          "time_span": { "start": 0.0, "end": 100.0 },
+          "parameter_overrides": {
+            "StressBalance.sb_model": 1.0,
+            "StressBalance.tauc": 0.0,
+            "StressBalance.mask_c": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "ubar", "time": 100.0, "expected": 2.5784930700498497e-05,
+              "tolerance": { "rel": 0.002 }
+            },
+            {
+              "variable": "u3", "time": 100.0, "coords": { "lev": 2 },
+              "expected": 2.5784930700498497e-05, "tolerance": { "rel": 0.002 }
+            },
+            {
+              "variable": "vbar", "time": 100.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            },
+            {
+              "variable": "F_b", "time": 100.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "hybrid_wiring",
+          "description": "Model = ssa+sia (sb_model 2) wiring at t = 0: the SSA state is the exact-solution warm start (the van der Veen profile of the SSA leaf's initial condition), so ubar = u_ic(30) = u_exact(dump cell 29) = 2.5762120147478445e-05, and the assembled u3[2] = ubar + the sia-run shear at level 2 of the (20,15) dump, u3_sia0[2] = 1.5902297112414521e-08 (columns.csv k=1 at cell (20,15); the same (20,15) staggered-family overrides as the sia_cell_20_15 test, so the SIA shear at sliding 0 is the dumped value): the sliding-velocity coupling into the SIA profile and the u3 = u3_sia selection of model 2. The hybrid full-field values (div/w3/sigma of model 2) are NOT asserted: with the sia-run neighbor inputs they carry the sliding-velocity jump across the cell (deferred to the full-grid assembly of stage 3).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "StressBalance.sb_model": 2.0,
+            "SIAEast.thk": 2454.7418119333006,
+            "SIAEast.ks": 36.0,
+            "SIAEast.E": [94164.0188116336, 91498.51415598279, 88859.07609257314, 86245.32411350089, 83656.88508099734, 81093.39304984597, 78554.4890949101, 76039.82114359864, 73549.04381310804, 71081.81825228073, 68637.81198792823, 66216.69877547336, 63818.15845376988, 61441.87680396375, 59087.54541226571, 56754.86153650997, 54443.52797637572, 52153.25294715693, 49883.7499569667, 47634.73768726697, 45405.93987662044, 43197.08520756334, 41007.90719650018, 38838.144086529384, 36687.538743107245, 34555.83855246317, 32442.795322682694, 30348.1651873762, 28271.708511855104, 26213.189801739365, 24172.37761392407, 22149.044469832726, 20142.96677089092, 18153.924716152687, 16181.702222016918, 14226.086843971898, 12521.543750100458, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIAEast.alpha": 0.002443432829344296,
+            "SIAEast.theta": 1.0,
+            "SIAWest.thk": 2589.1490915821087,
+            "SIAWest.ks": 38.0,
+            "SIAWest.E": [96101.93426566327, 93436.38296575425, 90796.80678690792, 88182.82788777362, 85594.07571990372, 83030.18685264295, 80490.80480303994, 77975.579870612, 75484.16897680395, 73016.23550898567, 70571.44916883788, 68149.48582498592, 65750.0273697404, 63372.761579812824, 61017.3819808789, 58683.58771586505, 56371.08341683936, 54079.57908039299, 51808.789946401535, 49558.4363800586, 47328.243757081145, 45117.94235198597, 42927.267229341815, 40755.958137906506, 38603.7594075589, 36470.419848939884, 34355.6926557209, 32259.335309419006, 30181.109486681584, 28120.78096896653, 26078.11955454634, 24052.898972765295, 22044.896800484585, 20053.894380648955, 18079.676742912936, 16122.032526266605, 14180.75390360121, 12255.636508159107, 10455.606707579194, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIAWest.alpha": 0.00218615124744799,
+            "SIAWest.theta": 1.0,
+            "SIANorth.thk": 2519.0001549062827,
+            "SIANorth.ks": 37.0,
+            "SIANorth.E": [95159.96012950611, 92494.43141954488, 89854.9221319991, 87241.05313639334, 84652.45263242486, 82088.75597366251, 79549.60549630948, 77034.65035286076, 74543.54635049377, 72075.95579403512, 69631.54733335282, 67209.99581502978, 64810.98213817933, 62434.1931142666, 60079.321330809005, 57746.065018829846, 55434.12792394453, 53143.21918096511, 50873.053191910934, 48623.34950731724, 46393.83271073963, 44184.23230635382, 41994.28260955313, 39823.72264045323, 37672.29602021241, 35539.75087008164, 33425.839713101144, 31330.319378362557, 29252.950907758837, 27193.49946514717, 25151.73424785235, 23127.428400439734, 21120.35893069153, 19130.306627719958, 17157.0559821543, 15200.395108341409, 13260.115668500006, 11336.012798771822, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIANorth.alpha": 0.0023159308350506115,
+            "SIANorth.theta": 1.0,
+            "SIASouth.thk": 2519.0001549062827,
+            "SIASouth.ks": 37.0,
+            "SIASouth.E": [95159.96012950611, 92494.43141954488, 89854.9221319991, 87241.05313639334, 84652.45263242486, 82088.75597366251, 79549.60549630948, 77034.65035286076, 74543.54635049377, 72075.95579403512, 69631.54733335282, 67209.99581502978, 64810.98213817933, 62434.1931142666, 60079.321330809005, 57746.065018829846, 55434.12792394453, 53143.21918096511, 50873.053191910934, 48623.34950731724, 46393.83271073963, 44184.23230635382, 41994.28260955313, 39823.72264045323, 37672.29602021241, 35539.75087008164, 33425.839713101144, 31330.319378362557, 29252.950907758837, 27193.49946514717, 25151.73424785235, 23127.428400439734, 21120.35893069153, 19130.306627719958, 17157.0559821543, 15200.395108341409, 13260.115668500006, 11336.012798771822, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "SIASouth.alpha": 0.0023159308350506115,
+            "SIASouth.theta": 1.0,
+            "SIAVel.h_x_e": -0.002443432829344296,
+            "SIAVel.h_y_e": 0.0,
+            "SIAVel.h_x_w": -0.00218615124744799,
+            "SIAVel.h_y_w": 0.0,
+            "SIAVel.h_x_n": -0.002304472666031095,
+            "SIAVel.h_y_n": -0.00023008990471935046,
+            "SIAVel.h_x_s": -0.002304472666031095,
+            "SIAVel.h_y_s": 0.00023008990471935046,
+            "SIAFlux.h_x": -0.002443432829344296,
+            "SIAFlux.h_y": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "ubar", "time": 0.0, "expected": 2.5762120147478445e-05,
+              "tolerance": { "rel": 1e-09 }
+            },
+            {
+              "variable": "u3", "time": 0.0, "coords": { "lev": 2 },
+              "expected": 2.5778022444590863e-05, "tolerance": { "rel": 1e-09 }
+            }
+          ]
+        },
+        {
+          "id": "fb_grounded",
+          "description": "Synthetic basal frictional heating on grounded ice (mask 2): with tauc = 1e5 Pa, the basal speed from the SSA warm start (u_ic(30), v_ssa = 1e-3 m/s) and eps = 0.01 m/yr, the plastic-drag formula gives F_b = tauc*(ubar^2+vbar^2)/sqrt(eps^2+ubar^2+vbar^2) = 100.03317883754333 W/m^2 (hand-computed from the formula; the instrumented runs never produced a nonzero F_b -- ZeroSliding in the sia run, tauc = 0 in the ssa run).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "StressBalance.sb_model": 1.0,
+            "StressBalance.tauc": 100000.0,
+            "StressBalance.v_ssa": 0.001
+          },
+          "assertions": [
+            {
+              "variable": "ubar", "time": 0.0, "expected": 2.5762120147478445e-05,
+              "tolerance": { "rel": 1e-09 }
+            },
+            {
+              "variable": "F_b", "time": 0.0, "expected": 100.03317883754333,
+              "tolerance": { "rel": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "fb_ocean",
+          "description": "Synthetic basal frictional heating on ice-free ocean (mask 4): F_b = 0 regardless of the sliding speed and tauc (the mask.ocean skip of ShallowStressBalance::compute_basal_frictional_heating; util/Mask.hh ocean = floating or ice-free).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "StressBalance.sb_model": 1.0,
+            "StressBalance.tauc": 100000.0,
+            "StressBalance.v_ssa": 0.001,
+            "StressBalance.mask_c": 4.0
+          },
+          "assertions": [
+            {
+              "variable": "ubar", "time": 0.0, "expected": 2.5762120147478445e-05,
+              "tolerance": { "rel": 1e-09 }
+            },
+            {
+              "variable": "F_b", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            }
+          ]
+        },
+        {
+          "id": "fb_floating",
+          "description": "Synthetic basal frictional heating on floating ice (mask 3): F_b = 0 even with tauc > 0 and a nonzero basal speed -- mask.ocean includes floating ice, so the skip of ShallowStressBalance::compute_basal_frictional_heating applies on the shelf as well as on ice-free ocean (the distinguishing case the all-zero stage-1 F_b dumps cannot pin: the instrumented ssa run had tauc = 0 on the shelf, so both semantics agree there).",
+          "time_span": { "start": 0.0, "end": 1.0 },
+          "parameter_overrides": {
+            "StressBalance.sb_model": 1.0,
+            "StressBalance.tauc": 100000.0,
+            "StressBalance.v_ssa": 0.001,
+            "StressBalance.mask_c": 3.0
+          },
+          "assertions": [
+            {
+              "variable": "ubar", "time": 0.0, "expected": 2.5762120147478445e-05,
+              "tolerance": { "rel": 1e-09 }
+            },
+            {
+              "variable": "F_b", "time": 0.0, "expected": 0.0,
+              "tolerance": { "abs": 1e-12 }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "SIAEast.I",
+      "to": "SIAVel.I_e",
+      "transform": "param_to_var",
+      "description": "I(z) column at the east staggered point (i,j,0) into the SIA velocity stencil."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIAWest.I",
+      "to": "SIAVel.I_w",
+      "transform": "param_to_var",
+      "description": "I(z) column at the west staggered point (i-1,j,0) into the SIA velocity stencil."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIANorth.I",
+      "to": "SIAVel.I_n",
+      "transform": "param_to_var",
+      "description": "I(z) column at the north staggered point (i,j,1) into the SIA velocity stencil."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIASouth.I",
+      "to": "SIAVel.I_s",
+      "transform": "param_to_var",
+      "description": "I(z) column at the south staggered point (i,j-1,1) into the SIA velocity stencil."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIAEast.D",
+      "to": "SIAFlux.D",
+      "transform": "param_to_var",
+      "description": "SIA diffusivity at the east staggered point into the diffusive-flux component."
+    },
+    {
+      "type": "variable_map",
+      "from": "StressBalance.ubar",
+      "to": "SIAVel.sliding_velocity_u",
+      "transform": "param_to_var",
+      "description": "Assembled 2D velocity x-component as the SIA basal sliding velocity (ZeroSliding gives 0, SSA gives u_ssa)."
+    },
+    {
+      "type": "variable_map",
+      "from": "StressBalance.vbar",
+      "to": "SIAVel.sliding_velocity_v",
+      "transform": "param_to_var",
+      "description": "Assembled 2D velocity y-component as the SIA basal sliding velocity."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIAVel.u3",
+      "to": "StressBalance.u3_sia",
+      "transform": "param_to_var",
+      "description": "SIA 3D velocity x-component (with sliding) into the assembler."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIAVel.v3",
+      "to": "StressBalance.v3_sia",
+      "transform": "param_to_var",
+      "description": "SIA 3D velocity y-component (with sliding) into the assembler."
+    },
+    {
+      "type": "variable_map",
+      "from": "StressBalance.div",
+      "to": "SIAW.div",
+      "transform": "param_to_var",
+      "description": "Assembled horizontal divergence into the vertical-velocity component."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIAW.w3",
+      "to": "StressBalance.w3_sia",
+      "transform": "param_to_var",
+      "description": "Vertical velocity of the SIA part (trapezoid of -div) back into the assembler."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIAFlux.q_x",
+      "to": "StressBalance.q_x_sia",
+      "transform": "param_to_var",
+      "description": "SIA diffusive flux x-component at the east staggered point into the assembler."
+    },
+    {
+      "type": "variable_map",
+      "from": "SIAFlux.q_y",
+      "to": "StressBalance.q_y_sia",
+      "transform": "param_to_var",
+      "description": "SIA diffusive flux y-component at the east staggered point into the assembler."
+    },
+    {
+      "type": "variable_map",
+      "from": "SSA.u",
+      "to": "StressBalance.u_ssa",
+      "transform": {
+        "op": "index",
+        "args": ["SSA.u", 30]
+      },
+      "description": "SSA velocity at the sampled cell: esm index 30 of the 60-cell flow line = dump cell 29 of stage1/dumps/ssa/columns.csv."
+    }
+  ]
+}
