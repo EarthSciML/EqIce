@@ -258,9 +258,11 @@ whether the `.esm` reproduces or corrects it, and status.
    mask-limited face fluxes + closed-domain conservation integral,
    source_term_step with clamping, part-grid thresholds @ rel 1e-12) — all
    12 leaf components done (full native suite 3248/3248 + energy 104 under
-   interpreter) → subassemblies (in progress: stress_balance.esm mounting
-   SIA+SSA by ref with the shared D methods; completing the deferred 3-D
-   coupled energy/age solves; harness mount+coupling verified by probe).
+   interpreter) → subassemblies (stress_balance ✅: `stage2/stress_balance.esm`
+   + `stage2/stress_balance_templates.esm`, 47/47 tests, 8 mounts + 14
+   variable_map couplings, SIA+SSA by ref with the shared D-methods Σ/w/F_b;
+   `esm test` runs coupled documents; suite now 3295/3295 native; deferred
+   3-D coupled energy/age solves in flight).
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 

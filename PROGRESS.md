@@ -977,6 +977,57 @@ With this commit, **all 12 Stage-2 leaf components are authored and passing**
 - **Verification** ✅ — `validate`/`info`/`units --check` clean; full
   native suite 3248/3248.
 
+## Milestone 4 (continued) — Stage 2: stress-balance subassembly authored and passing ✅
+
+The first TRUE cross-component assembly — `stage2/stress_balance.esm` (merged
+`<merge>`, from wt/sb commit `36d177e` (merged as part of the subassembly milestone)): the PISM `StressBalance` assembler with
+the SIA and SSA leaf components **mounted by reference** and **coupled**, plus
+the three shared D-methods, with scenario tests vs the sia/ssa dumps.
+This proves the composition machinery end-to-end.
+
+- **Assembly wiring** — 8 top-level `models.<k>` `{ref}` mounts with `"model"`
+  selectors (`SIADiffusivityColumn` ×4 (I columns), `SIADiffusiveFlux`,
+  `SIA3DHorizontalVelocity`, `SIAVerticalVelocity`, `SSAFlowline`) and 14
+  `variable_map` couplings (incl. `{"op":"index",...}` literal-index
+  transforms and a `param_to_var` hybrid-sliding coupling
+  `StressBalance.ubar/vbar` → `SIAVel.sliding_velocity_*`).
+- **Harness capability (empirically established)** — **`esm test` RUNS a
+  coupled document**: mounted tests are dropped (§6.6 normative), the
+  subassembly's own 47 assertions run under the native compiler (and
+  interpreter). Two native constraints shaped the equations: differing-branch
+  `ifelse` boxes are refused → ConstantInColumn selection via lev-shaped
+  `ubar_col/vbar_col` boxes; index maps must be affine/constant → the
+  u_z/v_z bed/interior switch is a `makearray` region split (algebraically
+  identical).
+- **Assembler semantics (verified against C++)** — PISM 2.3.2 has NO per-cell
+  mask-based SIA/SSA selection: `stress_balance.model` picks ZeroSliding+SIAFD
+  (`sia`), SSAFD+ConstantInColumn (`ssa`), or SSAFD+SIAFD (`ssa+sia`) at the
+  config level, and SIAFD applies everywhere (no grounded gate). Encoded as
+  `sb_model` (0/1/2). Σ = 2·e^(−1/n)·B·D2^(0.5(1/n+1)) with B from the
+  pressure-adjusted temperature (the C++'s T_pa-vs-absolute-T inconsistency,
+  already in bugs.md, confirmed against dumps); w = trapezoid of −div via the
+  mounted SIAVerticalVelocity (w[0]=−bmr, bmr=0 in traces); F_b = C·|ubar|²,
+  plastic C = tauc/√(ε²+…), skipped on mask ocean (3) AND ice-free (4).
+- **Tests** — 47/47 native + interpreter: sia grounded (20,15) 20/20
+  (u3/v3/w3/sigma vs columns.csv, q_x vs diffusive_flux.csv, machine
+  precision), sia margin (27,15) 15/15 (one-sided x-stencil), ssa floating
+  cell 29 (ubar = SSA steady state rel 2e-3; hybrid ubar = u_exact(29) =
+  2.5762120147478445e-05 bit-exact, verified by the manager vs the dump),
+  F_b synthetic (grounded 100.03317883754333 W/m², ocean/floating 0).
+- **Leaf fidelity bug fixed (found by the subassembly)** — `stage2/sia.esm`
+  I(z): the cumulative trapezoid added a spurious partial top interval above
+  each column's surface; `SIAFD::compute_I` fills levels above the ice with an
+  exact copy of the top in-ice value. Fix: `j <= ks` cap (8-line diff); leaf
+  tests unchanged (48/48). This is an .esm fidelity bug, not C++.
+- **C++ bugs** — none new (T_pa inconsistency re-confirmed; bugs.md #1–#6).
+- **Deferred to Stage 3** — full-grid neighbor couplings (dump-sampled
+  parameters here), model-1 div/w3 + model-2 hybrid full-field assertions,
+  the −bmr base term, BedSmoother, all four flux faces,
+  `vertical_velocity_approximation=upstream`, full 2-D SSA hybrid with basal
+  drag.
+- **Verification** — validate/info/units clean; full suite 3295/3295 native +
+  104 interpreter.
+
 ## Milestone 4 (continued) — Stage 2: subassembly phase launched (3 workers in flight)
 
 With all 12 leaf components merged (full native suite 3248/3248 + energy 104
