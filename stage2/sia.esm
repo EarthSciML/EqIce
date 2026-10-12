@@ -272,7 +272,7 @@
           }
         },
         {
-          "_comment": "I(z) = integral of delta from the bed (cumulative trapezoid, prefix reduction)",
+          "_comment": "I(z) = integral of delta from the bed (cumulative trapezoid, prefix reduction); the j <= ks cap reproduces the exact constant fill of SIAFD::compute_I above the ice (I_ij[k] = I_current for k > ks): without it the cumulative sum would add a spurious half top interval (delta -> 0 above the surface) and drift from the C++ above the column's surface -- a fidelity bug found by the stress-balance subassembly (stress_balance.esm) at levels above the staggered columns' surfaces.",
           "lhs": "I",
           "rhs": {
             "op": "faq",
@@ -283,7 +283,13 @@
               "i": { "from": "lev" },
               "j": [1, 60]
             },
-            "filter": { "op": "<", "args": ["j", "i"] },
+            "filter": {
+              "op": "and",
+              "args": [
+                { "op": "<", "args": ["j", "i"] },
+                { "op": "<=", "args": ["j", "ks"] }
+              ]
+            },
             "expr": {
               "op": "trapezoid_step",
               "args": [
