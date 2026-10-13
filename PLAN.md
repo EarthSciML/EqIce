@@ -147,12 +147,69 @@ For each component (bottom-up; leaf physics first, then subassemblies):
 
 ## 6. Stage 3 — Top-level `eqice.esm`
 
-1. Import the merged components by reference into `eqice.esm`.
-2. Add the couplings (stress balance ↔ energy, basal resistance ↔ hydrology,
-   surface/ocean forcing, bed deformation, calving/front retreat).
-3. Test against full-C++-model simulations (integrated trajectories over
-   realistic domains), using the same run configurations as Stage 1.
-4. Iterate on coupling order/timestep and any subassembly discrepancies.
+### 6.1 Design: PISM-matching operator splitting with per-substep solvers
+
+The full model is a PDAE (algebraic SSA momentum equilibrium + PDE transport
+steps), and the harness refuses implicit algebraic equations (CONFORMANCE_SPEC
+§5.39). PISM itself never solves the PDAE monolithically — `IceModel::step`
+(boundaries.md §0) operator-splits every step: converge the equilibrium with
+the slow state pinned, then advance the PDE pieces with those velocities and
+forcing held fixed. Stage 3 mirrors that structure exactly:
+
+1. **The equilibrium substep is a nonlinear solve, realized as pseudo-transient
+   relaxation.** The harness cannot run the algebraic SSA equations, so PISM's
+   Picard/Newton solve is realized as u_t = residual(u; H, E, tauc) integrated
+   to steady state with the slow variables pinned — the Stage-2 validated
+   pattern (relaxed steady state = Picard fixed point; `taud_x` bit-exact vs
+   the dump). BDF converges it to machine precision on the small 2-D state
+   (~2k unknowns, ~30 MB dense Jacobian). ERK does NOT converge it tightly
+   (residual stalls ~1e-3; manager probe), so the equilibrium substep runs
+   implicit.
+2. **Transport/source substeps run explicit (ERK) on the full grid.** ERK
+   needs no Jacobian — O(N) memory (probes: geometry 81/81 under ERK; age 3-D
+   passes modulo atol=0 artifacts on exactly-zero quantities; CFL limits at
+   test-F resolution are years-to-decades vs 1-yr steps). Near-zero assertions
+   in ERK-run tests need `atol`.
+3. **Stiff 3-D pieces (energy vertical diffusion) keep the validated block
+   pattern** (2×3 columns) or go explicit (vertical-diffusion explicit limit
+   ~60 yr at Δz = 65.6 m); decided at implementation time.
+4. **No full-grid dense Jacobian anywhere.** The 113 GB figure (age3d probe)
+   applies only to one monolithic BDF solve over the whole 3-D field — not
+   used. Implicit pieces are small-state; explicit pieces are O(N).
+
+### 6.2 The full-model C++ driver (reference data)
+
+- `stage1/instrument/instrument_icemodel.cc` — follows the per-boundary
+  driver pattern, chaining the components through their public APIs in the §0
+  order (or driving `IceModel` directly if it exposes the boundaries),
+  configured like PISM verification test F on the standard 31×31×61 grid
+  (Lx=Ly=900 km, Lz=4000 m) with the component set matching the 12 boundaries,
+  run for 3–5 steps (adaptive dt), dumping each boundary's inputs/outputs per
+  step into `stage1/dumps/fullmodel/` (gitignored) in the stage-1 column
+  conventions. Also dumps the equilibrium substep's Picard iterates for at
+  least one step (validates the relaxation-vs-nonlinear-solve correspondence).
+- `stage1/runs/fullmodel.json` records the exact configuration + regeneration
+  command.
+
+### 6.3 The `eqice.esm` orchestration
+
+- `stage3/eqice.esm` mounts the merged components/subassemblies by reference
+  and couples them with `variable_map` edges in the §0 order: equilibrium
+  (mounted stress_balance, relaxation form) → tauc → age → energy → flow_step
+  → source_term_step → calving/front retreat → surface/ocean → hydrology →
+  bed.
+- Each substep is its own model wired sequentially (the flow_step /
+  source_term_step pattern); tests cover 3–5 orchestrated steps vs the
+  driver's per-step dumps (pinned inputs; documented tolerances — exact for
+  pure functions, measured for scheme gaps).
+- Calving stays step maps (no discrete events).
+
+### 6.4 Sequencing
+
+1. **Driver first**: `instrument_icemodel.cc` + `runs/fullmodel.json` →
+   dumps (in progress).
+2. `eqice.esm` orchestration skeleton + first coupled steps vs dumps.
+3. Iterate on coupling order/timestep and any subassembly discrepancies.
 
 ## 7. Repository layout (this repo)
 
@@ -267,7 +324,10 @@ whether the `.esm` reproduces or corrects it, and status.
    7×7-column block; full-field dense Jacobian ~113 GB measured → documented
    sub-domain pattern). All subassemblies done — suite 3443/3443 native + 195
    interpreter; Stage 3 next (top-level `eqice.esm` + full-model C++ runs).
-5. Stage-3: `eqice.esm` coupling + full-model validation.
-4. Stage-3: `eqice.esm` coupling + full-model validation.
+5. Stage-3 (design in §6: PISM-matching operator splitting, per-substep
+   solvers — BDF relaxation-equilibrium on the small 2-D state, ERK transport
+   on the full grid): first task is the full-model C++ driver
+   (`instrument_icemodel.cc` + `runs/fullmodel.json` → `dumps/fullmodel/`),
+   then `stage3/eqice.esm` orchestration vs the per-step dumps.
 
 Each milestone closes with merged PRs and passing inline tests.
