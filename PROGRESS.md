@@ -1028,6 +1028,47 @@ This proves the composition machinery end-to-end.
 - **Verification** — validate/info/units clean; full suite 3295/3295 native +
   104 interpreter.
 
+## Milestone 4 (continued) — Stage 2: 3-D coupled energy and age subassemblies authored and passing ✅
+
+The deferred 3-D pieces of the energy and age boundaries, merged from wt/energy3d
+(commit `84cc203` → merge `404a20f`) and wt/age3d (commit `2896e62` → merge
+`1e2f2e5`). Both are full 3-D PDE solves with **live horizontal exchange**
+between columns — the horizontal-advection terms the leaf column models
+deferred.
+
+- **Energy 3-D** — `stage2/ice_energy_3d.esm` (91 assertions) +
+  `energy_3d_templates.esm` (3-D template lifts) + `tools/build_energy3d_data.py`:
+  the full enthalpy PDE dE/dt = ∂/∂z(K ∂E/∂z) − w·∂E/∂z − (u·∂E/∂x + v·∂E/∂y)
+  + σ/ρ over four 2×3-column sub-domains, built on the validated EnthalpyColumn
+  (BOMBPROOF vertical stencils, ColumnInterpolation maps, cold/temperate
+  diffusivity switch, basal melt) imported/lifted by reference. 91/91 under the
+  interpreter (23m44s). The last open item was NOT a model bug: (16,15) is the
+  only cell whose second fine layer starts at the cold-temperate transition at
+  the last bit (E_f[2] = E_cts[1] + 4e-11), switching the basal diffusivity
+  entries R[0]/R[1] to the temperate ratio·K (ratio=0.1) — a ~392 J/kg
+  one-step scheme gap vs the dump, measured and documented (tolerances widened
+  to the measured values; sign of the gap flips with local dynamics). The
+  **no-coupling demonstration** assertion: a hadv-free control copy fails at
+  (7,15) lev 21 by 1.320 J/kg (> 0.1 tol), proving the horizontal exchange is
+  live.
+- **Age 3-D** — `stage2/ice_age_3d.esm` (model AgeBlock3D, 62 assertions) +
+  `age3d_templates.esm` + `tools/build_age3d_data.py`: the age PDE
+  ∂τ/∂t + u·∂τ/∂x + v·∂τ/∂y + w·∂τ/∂z = 1 on a 7×7-column block (~9k unknowns,
+  ~0.7 GB dense Jacobian), 62-level fine grid, **native** compiler, 62/62.
+  Block-edge ghosts frozen at the full-field initial age (exactly zero here).
+- **Harness capability fact (answers the 3-D scaling question)** — the ODE
+  harness's implicit solvers form a **dense Jacobian**: the full 31×31 field
+  (~119k unknowns) needs ~113 GB and was measured and killed in an early
+  probe; the 7×7 block (~9k unknowns) needs ~0.7 GB and integrates fine. The
+  documented sub-domain pattern is therefore the established route for 3-D
+  fields (energy uses four 2×3 blocks, age one 7×7 block).
+- **C++ bugs** — none found (energy3d worker: "the only bug found was in the
+  previous attempt's own build script — a transposed block_slice"; age3d:
+  none).
+- **Verification** — validate/info/units clean on both; age3d 62/62 native,
+  energy3d 91/91 interpreter (both re-run by the manager); full 13-file native
+  regression 3443/3443 per the energy3d worker (re-run on main, see below).
+
 ## Milestone 4 (continued) — Stage 2: subassembly phase launched (3 workers in flight)
 
 With all 12 leaf components merged (full native suite 3248/3248 + energy 104

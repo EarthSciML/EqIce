@@ -261,8 +261,12 @@ whether the `.esm` reproduces or corrects it, and status.
    interpreter) → subassemblies (stress_balance ✅: `stage2/stress_balance.esm`
    + `stage2/stress_balance_templates.esm`, 47/47 tests, 8 mounts + 14
    variable_map couplings, SIA+SSA by ref with the shared D-methods Σ/w/F_b;
-   `esm test` runs coupled documents; suite now 3295/3295 native; deferred
-   3-D coupled energy/age solves in flight).
+   `esm test` runs coupled documents) → 3-D coupled energy ✅
+   (`stage2/ice_energy_3d.esm`, 91/91 interpreter, four 2×3-column blocks with
+   live horizontal exchange) and age ✅ (`stage2/ice_age_3d.esm`, 62/62 native,
+   7×7-column block; full-field dense Jacobian ~113 GB measured → documented
+   sub-domain pattern). All subassemblies done — suite 3443/3443 native + 195
+   interpreter; Stage 3 next (top-level `eqice.esm` + full-model C++ runs).
 5. Stage-3: `eqice.esm` coupling + full-model validation.
 4. Stage-3: `eqice.esm` coupling + full-model validation.
 
