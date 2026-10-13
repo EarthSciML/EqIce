@@ -1057,11 +1057,21 @@ deferred.
   ~0.7 GB dense Jacobian), 62-level fine grid, **native** compiler, 62/62.
   Block-edge ghosts frozen at the full-field initial age (exactly zero here).
 - **Harness capability fact (answers the 3-D scaling question)** — the ODE
-  harness's implicit solvers form a **dense Jacobian**: the full 31×31 field
-  (~119k unknowns) needs ~113 GB and was measured and killed in an early
-  probe; the 7×7 block (~9k unknowns) needs ~0.7 GB and integrates fine. The
-  documented sub-domain pattern is therefore the established route for 3-D
-  fields (energy uses four 2×3 blocks, age one 7×7 block).
+  harness's implicit solvers (BDF/SDIRK, the default) form a **dense
+  finite-difference Jacobian** over the whole state vector: the full 31×31
+  field (~119k unknowns) needs ~113 GB and was measured and killed in an
+  early probe; the 7×7 block (~9k unknowns) needs ~0.7 GB and integrates
+  fine. The documented sub-domain pattern is therefore the established route
+  for implicit 3-D fields (energy uses four 2×3 blocks, age one 7×7 block).
+  **Explicit ERK is available (`--solver erk`) and needs NO Jacobian (O(N)
+  memory)** — manager probes: geometry 81/81 under ERK; age 3-D passes (only
+  two atol=0 assertions on exactly-zero quantities differ at the 1e-21 level);
+  the SSA relaxation reaches only ~1e-3 residual under ERK (vs machine-zero
+  BDF) — the elliptic equilibrium is the one piece that wants the implicit
+  solver, but its state is 2-D (~2k unknowns, ~30 MB dense Jacobian). The
+  113 GB figure applies only to ONE monolithic BDF solve over the whole 3-D
+  field — the Stage-3 orchestration should use per-substep solvers (ERK for
+  transport on the full grid, BDF for the small stiff pieces).
 - **C++ bugs** — none found (energy3d worker: "the only bug found was in the
   previous attempt's own build script — a transposed block_slice"; age3d:
   none).
