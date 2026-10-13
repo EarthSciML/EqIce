@@ -1,0 +1,89 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "age3d_templates",
+    "description": "Expression-template library for the PISM ice-age 3-D field component (stage 2 of the eqice project): the fixed linear coarse-to-fine interpolation of columnSystemCtx and the block-model horizontal-advection stencil of the age equation. age_coarse_to_fine is the linear-in-level map of ColumnInterpolation::coarse_to_fine_linear: fine level k (1-based, z = (k-1)*Lz/61) sits between storage levels k-1 and k (z = (m-1)*Lz/60) with the fixed weight w = (62-k)/61 of the upper level, exact for every k = 1..62 because the weight degenerates to the pure lower level at k = 62 (w = 0, the C++ constant-extrapolation row) and to the pure upper level at k = 1 (w = 1, the z = 0 row). The consumer passes the bracket values as plain in-bounds gathers into the 63-entry padded storage column (entry k = storage level max(k-1, 1) for k = 1..62, entry 63 = the top storage level): at k = 1 both bracket reads land on storage level 1 (weight w = 1, the bed row) and at k = 62 both land on storage level 61 (weight w = 0, the domain top). age_horizontal_advection_field is the block-model field stencil of the C++ horizontal term u*d(tau)/dx + v*d(tau)/dy of AgeColumnSystem::solve, first-order upwind, evaluated at the CURRENT time from the LIVE neighbor columns within the 7x7 block (the coupled PDE the ODE harness integrates; the C++ evaluates the same stencil at the OLD time from the step-start neighbor ages, which are all zero in this run because the whole domain starts at age 0 -- the difference is the integrated horizontal contribution of the developing age field, measured and documented in the tests). The four neighbor reads are in-bounds gathers into the block state clamped with max(i-1,1)/min(i+1,7)/max(j-1,1)/min(j+1,7), with the block-edge ghost frozen at the full-field initial age -- exactly zero in this run (age.initial_value = 0), so the ifelse else-branch literal 0.0 is exact and equals the C++'s old-time read of the neighbor column at the step start; the clamp keeps every gather in-bounds under any ifelse evaluation order for the native compiler, and the literal ghost branch is a constant select (the native compiler accepts this form, unlike the full-field-at-offset gather form, which it refuses -- see ice_age_3d.esm). The velocities u, v are the block-local 63-entry padded storage-grid fields (the block slices of the dumped u3_s/v3_s), interpolated to the fine grid in-model by age_coarse_to_fine. The term is the explicit-at-old-time part of the C++ step; here it is integrated continuously, so the model's age_out differs from the dump by the integrated horizontal contribution of the developing age field (measured in the tests; small for one step because the deep field is horizontally uniform at dt while the near-surface gradients advect with |u| ~ 1e-9..1e-8 m/s over dx = 58 km).",
+    "license": "GPL-3.0-or-later",
+    "tags": [
+      "eqice:stage2",
+      "pism:age",
+      "grid:cartesian_uniform_2d"
+    ]
+  },
+  "expression_templates": {
+    "age_coarse_to_fine": {
+      "description": "The linear-in-level coarse-to-fine map of columnSystemCtx at one fine-grid level k: fine[k] = (1 - w)*p[k] + w*p[k+1] with the fixed weight w = (62-k)/61, where p is the 63-entry padded storage column (the same linear map as age_storage_interpolate of ./age_templates.esm, applied to the fine-grid bracket of the storage grid). The consumer supplies the bracket values p[k], p[k+1] as plain in-bounds gathers into the padded column (entry k of the padded column is storage level max(k-1, 1) for k = 1..62 and entry 63 is the top storage level, so the bracket reads are in-bounds for every fine level k without branch or wrap); the map is exact at the ends by the weight degeneracy: w = 1 at k = 1 (the bed level, fine z = 0 = storage level 1) and w = 0 at k = 62 (the domain top, fine z = Lz = storage level 61, the C++ constant-extrapolation row).",
+      "params": ["p_k", "p_kp1", "k"],
+      "match": { "op": "age_coarse_to_fine", "args": ["p_k", "p_kp1", "k"] },
+      "body": {
+        "op": "age_storage_interpolate",
+        "args": ["p_k", "p_kp1", { "op": "/", "args": [{ "op": "-", "args": [62.0, "k"] }, 61.0] }]
+      }
+    },
+    "age_horizontal_advection_field": {
+      "description": "The first-order-upwind horizontal advection u*d(tau)/dx + v*d(tau)/dy of AgeColumnSystem::solve over the 7x7 block field (rows 0..m_ks of the C++ tridiagonal RHS): for u < 0 the upwind read is the east neighbor, else the west (and likewise in y), with the velocities the linear coarse_to_fine interpolations of the block-local padded storage-grid u, v at the block cell (i,j). The four neighbor ages are read LIVE from the block state (the coupled PDE integrated by the ODE harness) with the block-edge ghosts frozen at the full-field initial age, exactly zero in this run: age.initial_value = 0, so the ghost literal 0.0 is numerically identical to the C++'s old-time read of the neighbor column at the step start (also zero), and to the C++ grid's periodic wrap of the ice-free boundary ring. The clamps max(i-1,1) / min(i+1,7) / max(j-1,1) / min(j+1,7) keep every gather in-bounds under any ifelse evaluation order; the ifelse selects the frozen ghost at the block edge (same idiom as energy_horizontal_advection_field, but with the literal ghost -- the native compiler accepts this constant-select form, see ice_age_3d.esm). The term is the explicit-at-old-time part of the C++ step; here it is integrated continuously, so the model's age_out differs from the dump by the integrated horizontal contribution of the developing age field (measured in the tests; small for one step because the deep field is horizontally uniform at dt while the near-surface gradients advect with |u| ~ 1e-9..1e-8 m/s over dx = 58 km).",
+      "params": ["tau", "u", "v"],
+      "match": { "op": "age_horizontal_advection_field", "args": ["tau", "u", "v"] },
+      "body": {
+        "op": "faq",
+        "args": [],
+        "output_idx": ["i", "j", "k"],
+        "ranges": { "i": { "from": "i" }, "j": { "from": "j" }, "k": { "from": "lev" } },
+        "expr": {
+          "op": "age_horizontal_advection",
+          "args": [
+            { "op": "index", "args": ["tau", "i", "j", "k"] },
+            {
+              "op": "ifelse",
+              "args": [
+                { "op": ">", "args": ["i", 1] },
+                { "op": "index", "args": ["tau", { "op": "max", "args": [{ "op": "-", "args": ["i", 1] }, 1] }, "j", "k"] },
+                0.0
+              ]
+            },
+            {
+              "op": "ifelse",
+              "args": [
+                { "op": "<", "args": ["i", 7] },
+                { "op": "index", "args": ["tau", { "op": "min", "args": [{ "op": "+", "args": ["i", 1] }, 7] }, "j", "k"] },
+                0.0
+              ]
+            },
+            {
+              "op": "ifelse",
+              "args": [
+                { "op": ">", "args": ["j", 1] },
+                { "op": "index", "args": ["tau", "i", { "op": "max", "args": [{ "op": "-", "args": ["j", 1] }, 1] }, "k"] },
+                0.0
+              ]
+            },
+            {
+              "op": "ifelse",
+              "args": [
+                { "op": "<", "args": ["j", 7] },
+                { "op": "index", "args": ["tau", "i", { "op": "min", "args": [{ "op": "+", "args": ["j", 1] }, 7] }, "k"] },
+                0.0
+              ]
+            },
+            {
+              "op": "age_coarse_to_fine",
+              "args": [
+                { "op": "index", "args": ["u", "i", "j", "k"] },
+                { "op": "index", "args": ["u", "i", "j", { "op": "+", "args": ["k", 1] }] },
+                "k"
+              ]
+            },
+            {
+              "op": "age_coarse_to_fine",
+              "args": [
+                { "op": "index", "args": ["v", "i", "j", "k"] },
+                { "op": "index", "args": ["v", "i", "j", { "op": "+", "args": ["k", 1] }] },
+                "k"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
