@@ -1,0 +1,619 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "energy_3d_templates",
+    "description": "Expression-template library for the 3-D coupled PISM enthalpy field (stage 2 of the eqice project): the 3-D lifts of the column templates of ./energy_templates.esm -- vertical diffusion D(K*D(E,z),z) with the BOMBPROOF column stencil, vertical advection with the BOMBPROOF A-coefficients, explicit horizontal advection with first-order upwinding, the coarse-to-fine and fine-to-coarse column interpolation of ColumnInterpolation.cc, and the marginal-column flag of EnergyModel.cc -- plus the sub-domain ghost conventions of the coupled block model (EnthalpyField3D of ./ice_energy_3d.esm). The 3-D lifts differ from the column templates only in their shapes: every faq iterates (i, j, k) over the block index sets i/j (declared by the consuming model, size nb_i x nb_j) and the fine-grid index set lev_f (declared by ./energy_templates.esm), every stencil read is a three-argument index (x, i, j, k), and the per-column runtime parameters (the surface level ks, the marginal flag) are read with index(ks, i, j) / index(marginal, i, j) instead of the bare scalar names of the column templates. The horizontal-advection template takes its block extent from the consuming model's scalars nb_i/nb_j (default 2 x 3). The horizontal-advection template additionally implements the sub-domain boundary convention: the block has no live state outside its nb_i x nb_j footprint, so neighbor reads at the block edges (i = 1 or nb_i, j = 1 or nb_j) fall back to the FROZEN full-field initial enthalpy parameter E_f_init_g (esm indices (i0, j0+j), (i0+nb_i+1, j0+j), (i0+i, j0), (i0+i, j0+nb_j+1) for the west/east/south/north ghosts; i0/j0 are the consuming model's scalars holding the C++ indices of the block's west/south columns). Interior neighbor reads use the LIVE field (the coupled PDE), unlike the C++ which freezes the whole B-array at the old state; the one-step gap this introduces is tiny (horizontal advection eigenvalue |u|/dx ~ 2e-13 s^-1, dt*|u|/dx ~ 6e-5 over the 10-yr step). The index arguments of the live reads are clamped with min/max so the reads are in-bounds under any ifelse evaluation order (the clamped value is discarded by the branch selection). The marginal-column template follows EnergyModel::marginal: the flag is true when ANY of the 8 neighbors (periodic wrap in both directions, as the PISM ghost exchange) is thinner than margin_ice_thickness_limit (100 m); the 8 offsets are baked parameters di_nb/dj_nb over a small index set nb, and the OR is a max-reduction over the contracted nb. Free names in template bodies (constants and parameters such as rho_ice, c_ice, k_ice, ratio, dz, G, lambda, ks, dx, OM1, DR3, margin, i0, j0, exclude_h_adv, Mz, the interpolation maps m_c2f/incr_c2f/m_f2c/incr_f2c, and the full-field parameters E_f_init_g and di_nb/dj_nb) resolve against the importing model's declared parameters/variables (esm-spec 9.6.1); templates referencing other templates (energy_thermal_diffusivity) require the importing model to also import ./energy_templates.esm, and the enthalpy converters require ./ice_rheology_templates.esm. Reference implementation: PISM v2.3.2 (stage1/pism/src/energy/enthSystem.cc, EnthalpyModel.cc, EnergyModel.cc, ColumnInterpolation.cc)."
+  },
+  "expression_templates": {
+    "energy_vertical_diffusion_field": {
+      "description": "3-D lift of energy_vertical_diffusion (see ./energy_templates.esm for the stencil documentation): the vertical enthalpy diffusion D(K*D(E_f,z),z) with the PISM BOMBPROOF column stencil, one copy of the stencil per block column (i,j). Rewritten at priority 10 so it fires on the whole compound before any plain-D rule could lower the inner derivative. Match-scoped with where {E_f:[i,j,lev_f], K:[i,j,lev_f]} so it fires only on the 3-D field (the 1-D template of energy_templates.esm does not match these shapes). Rows: k = 1 is the basal Neumann row of set_basal_neumann_bc, rows 2..ks(i,j) the centered mean-face stencil, rows above ks(i,j) zero (the surface Dirichlet row and the atmosphere are pinned by the consuming model's initial condition and zero RHS).",
+      "params": ["K", "E_f"],
+      "priority": 10,
+      "match": {
+        "op": "D",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "K",
+              { "op": "D", "args": ["E_f"], "wrt": "z" }
+            ]
+          }
+        ],
+        "wrt": "z"
+      },
+      "where": { "E_f": { "shape": ["i", "j", "lev_f"] }, "K": { "shape": ["i", "j", "lev_f"] } },
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": [],
+        "ranges": {
+          "i": { "from": "i" },
+          "j": { "from": "j" },
+          "k": { "from": "lev_f" }
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            { "op": "==", "args": ["k", 1] },
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        {
+                          "op": "+",
+                          "args": [
+                            { "op": "index", "args": ["K", "i", "j", 1] },
+                            {
+                              "op": "*",
+                              "args": [
+                                0.5,
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    { "op": "index", "args": ["K", "i", "j", 1] },
+                                    { "op": "index", "args": ["K", "i", "j", 2] }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "-",
+                          "args": [
+                            { "op": "index", "args": ["E_f", "i", "j", 2] },
+                            { "op": "index", "args": ["E_f", "i", "j", 1] }
+                          ]
+                        }
+                      ]
+                    },
+                    { "op": "*", "args": ["dz", "dz"] }
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [2.0, "G", { "op": "index", "args": ["K", "i", "j", 1] }]
+                    },
+                    "dz"
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "and",
+                  "args": [
+                    { "op": ">=", "args": ["k", 2] },
+                    { "op": "<=", "args": ["k", { "op": "index", "args": ["ks", "i", "j"] }] }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                0.5,
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    { "op": "index", "args": ["K", "i", "j", { "op": "-", "args": ["k", 1] }] },
+                                    { "op": "index", "args": ["K", "i", "j", "k"] }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "-",
+                              "args": [
+                                { "op": "index", "args": ["E_f", "i", "j", { "op": "-", "args": ["k", 1] }] },
+                                { "op": "index", "args": ["E_f", "i", "j", "k"] }
+                              ]
+                            }
+                          ]
+                        },
+                        { "op": "*", "args": ["dz", "dz"] }
+                      ]
+                    },
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                0.5,
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    { "op": "index", "args": ["K", "i", "j", "k"] },
+                                    { "op": "index", "args": ["K", "i", "j", { "op": "+", "args": ["k", 1] }] }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "-",
+                              "args": [
+                                { "op": "index", "args": ["E_f", "i", "j", { "op": "+", "args": ["k", 1] }] },
+                                { "op": "index", "args": ["E_f", "i", "j", "k"] }
+                              ]
+                            }
+                          ]
+                        },
+                        { "op": "*", "args": ["dz", "dz"] }
+                      ]
+                    }
+                  ]
+                },
+                0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "energy_vertical_advection_field": {
+      "description": "3-D lift of energy_vertical_advection (see ./energy_templates.esm for the coefficient documentation): the vertical enthalpy advection with the BOMBPROOF upwind A-coefficients of enthSystemCtx::solve and set_basal_neumann_bc, one copy of the column stencil per block column (i,j), with the vertical velocity read from the model's w (bound to w_eff, the marginal-gated vertical velocity). Rows k = 1 (basal) and 2..ks(i,j) carry the stencil; rows above ks(i,j) return 0.",
+      "params": ["E", "w"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": [],
+        "ranges": {
+          "i": { "from": "i" },
+          "j": { "from": "j" },
+          "k": { "from": "lev_f" }
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            { "op": "==", "args": ["k", 1] },
+            {
+              "op": "+",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        { "op": "index", "args": ["w", "i", "j", 1] },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": "<", "args": [{ "op": "index", "args": ["w", "i", "j", 1] }, 0.0] },
+                                    { "op": "-", "args": ["lambda", 1.0] },
+                                    { "op": "-", "args": [1.0, "lambda"] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", "i", "j", 1] }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": "<", "args": [{ "op": "index", "args": ["w", "i", "j", 1] }, 0.0] },
+                                    { "op": "-", "args": [1.0, "lambda"] },
+                                    { "op": "-", "args": ["lambda", 1.0] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", "i", "j", 2] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "dz"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "index", "args": ["w", "i", "j", 1] },
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        { "op": "<", "args": [{ "op": "index", "args": ["w", "i", "j", 1] }, 0.0] },
+                        { "op": "-", "args": [0.0, "lambda"] },
+                        { "op": "-", "args": ["lambda", 2.0] }
+                      ]
+                    },
+                    "G"
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "ifelse",
+              "args": [
+                {
+                  "op": "and",
+                  "args": [
+                    { "op": ">=", "args": ["k", 2] },
+                    { "op": "<=", "args": ["k", { "op": "index", "args": ["ks", "i", "j"] }] }
+                  ]
+                },
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        { "op": "index", "args": ["w", "i", "j", "k"] },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["w", "i", "j", "k"] }, 0.0] },
+                                    { "op": "-", "args": [{ "op": "*", "args": [0.5, "lambda"] }, 1.0] },
+                                    { "op": "-", "args": [0.0, { "op": "*", "args": [0.5, "lambda"] }] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", "i", "j", { "op": "-", "args": ["k", 1] }] }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["w", "i", "j", "k"] }, 0.0] },
+                                    { "op": "-", "args": [1.0, "lambda"] },
+                                    { "op": "-", "args": ["lambda", 1.0] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", "i", "j", "k"] }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["w", "i", "j", "k"] }, 0.0] },
+                                    { "op": "*", "args": [0.5, "lambda"] },
+                                    { "op": "-", "args": [1.0, { "op": "*", "args": [0.5, "lambda"] }] }
+                                  ]
+                                },
+                                { "op": "index", "args": ["E", "i", "j", { "op": "+", "args": ["k", 1] }] }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "dz"
+                  ]
+                },
+                0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "energy_horizontal_advection_field": {
+      "description": "3-D lift of energy_horizontal_advection (see ./energy_templates.esm for the upwind documentation): the explicit horizontal enthalpy advection hadv = -upwind_u - upwind_v with first-order upwinding, per fine row k = 1..ks(i,j) of each block column. Neighbor enthalpies are read from the LIVE field (the coupled PDE the harness integrates: dE_f/dt includes the horizontal exchange between adjacent block columns), except at the block edges where the neighbor lies outside the nb_i x nb_j footprint: there the frozen full-field initial enthalpy E_f_init_g supplies the ghost (esm indices (i0, j0+j) west, (i0+nb_i+1, j0+j) east, (i0+i, j0) south, (i0+i, j0+nb_j+1) north, with i0/j0 the C++ indices of the block's west/south columns and nb_i/nb_j the block extent -- consuming-model scalars, default 2 x 3 for the sub-domain blocks of ice_energy_3d.esm). Live reads are clamped with min/max so every index expression is in-bounds under any ifelse evaluation order. Two gates, as in the column template: the marginal-column gate (energy.margin_exclude_horizontal_advection) and the column-domain gate (rows above ks(i,j) carry no horizontal advection). Invoke with E bound to the LIVE field E_f (unlike the column template, which the leaf binds to the frozen initial enthalpy because PISM evaluates its B-array at the old state; the coupled 3-D model integrates the continuous PDE instead -- the C++ explicit-at-old one-step is the reference trajectory, and the difference over one step is O(dt^2) in the horizontal exchange, ~6e-5 J/kg, far below the assertion tolerances; see ice_energy_3d.esm).",
+      "params": ["E", "u", "v"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": [],
+        "ranges": {
+          "i": { "from": "i" },
+          "j": { "from": "j" },
+          "k": { "from": "lev_f" }
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": "and",
+              "args": [
+                { "op": "index", "args": ["marginal", "i", "j"] },
+                "exclude_h_adv"
+              ]
+            },
+            0.0,
+            {
+              "op": "ifelse",
+              "args": [
+                { "op": "<=", "args": ["k", { "op": "index", "args": ["ks", "i", "j"] }] },
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                { "op": "index", "args": ["u", "i", "j", "k"] },
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["u", "i", "j", "k"] }, 0.0] },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        { "op": "index", "args": ["E", "i", "j", "k"] },
+                                        {
+                                          "op": "ifelse",
+                                          "args": [
+                                            { "op": ">", "args": ["i", 1] },
+                                            { "op": "index", "args": ["E", { "op": "max", "args": [{ "op": "-", "args": ["i", 1] }, 1] }, "j", "k"] },
+                                            { "op": "index", "args": ["E_f_init_g", "i0", { "op": "+", "args": ["j0", "j"] }, "k"] }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        {
+                                          "op": "ifelse",
+                                          "args": [
+                                            { "op": "<", "args": ["i", "nb_i"] },
+                                            { "op": "index", "args": ["E", { "op": "min", "args": [{ "op": "+", "args": ["i", 1] }, "nb_i"] }, "j", "k"] },
+                                            { "op": "index", "args": ["E_f_init_g", { "op": "+", "args": ["i0", { "op": "+", "args": ["nb_i", 1] }] }, { "op": "+", "args": ["j0", "j"] }, "k"] }
+                                          ]
+                                        },
+                                        { "op": "index", "args": ["E", "i", "j", "k"] }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "dx"
+                          ]
+                        },
+                        {
+                          "op": "/",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                { "op": "index", "args": ["v", "i", "j", "k"] },
+                                {
+                                  "op": "ifelse",
+                                  "args": [
+                                    { "op": ">=", "args": [{ "op": "index", "args": ["v", "i", "j", "k"] }, 0.0] },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        { "op": "index", "args": ["E", "i", "j", "k"] },
+                                        {
+                                          "op": "ifelse",
+                                          "args": [
+                                            { "op": ">", "args": ["j", 1] },
+                                            { "op": "index", "args": ["E", "i", { "op": "max", "args": [{ "op": "-", "args": ["j", 1] }, 1] }, "k"] },
+                                            { "op": "index", "args": ["E_f_init_g", { "op": "+", "args": ["i0", "i"] }, "j0", "k"] }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        {
+                                          "op": "ifelse",
+                                          "args": [
+                                            { "op": "<", "args": ["j", "nb_j"] },
+                                            { "op": "index", "args": ["E", "i", { "op": "min", "args": [{ "op": "+", "args": ["j", 1] }, "nb_j"] }, "k"] },
+                                            { "op": "index", "args": ["E_f_init_g", { "op": "+", "args": ["i0", "i"] }, { "op": "+", "args": ["j0", { "op": "+", "args": ["nb_j", 1] }] }, "k"] }
+                                          ]
+                                        },
+                                        { "op": "index", "args": ["E", "i", "j", "k"] }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            "dx"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                0.0
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "energy_coarse_to_fine_field": {
+      "description": "3-D lift of energy_coarse_to_fine (see ./energy_templates.esm for the interpolation documentation): ColumnInterpolation::coarse_to_fine_linear applied to every block column of a storage-grid field x on the FULL 31x31 grid, read at the absolute esm indices (i0+i, j0+j) of the block cell (i,j). Per fine level k: the bracketing storage level m_c2f[k] and fraction incr_c2f[k] are baked grid parameters; the fine value is the linear interpolation x[m_c2f[k]] + incr_c2f[k]*(x[m_c2f[k]+1] - x[m_c2f[k]]) below the ice surface (k <= ks(i,j)+1) and at levels whose bracketing storage level is below the top (m_c2f[k] < Mz-1); elsewhere (the atmosphere and the top storage level) the constant x[m_c2f[k]].",
+      "params": ["x"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": [],
+        "ranges": {
+          "i": { "from": "i" },
+          "j": { "from": "j" },
+          "k": { "from": "lev_f" }
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": "and",
+              "args": [
+                { "op": "<=", "args": ["k", { "op": "+", "args": [{ "op": "index", "args": ["ks", "i", "j"] }, 1] }] },
+                { "op": "<", "args": [{ "op": "index", "args": ["m_c2f", "k"] }, { "op": "-", "args": ["Mz", 1] }] }
+              ]
+            },
+            {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["x", { "op": "+", "args": ["i0", "i"] }, { "op": "+", "args": ["j0", "j"] }, { "op": "index", "args": ["m_c2f", "k"] }] },
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "index", "args": ["incr_c2f", "k"] },
+                    {
+                      "op": "-",
+                      "args": [
+                        { "op": "index", "args": ["x", { "op": "+", "args": ["i0", "i"] }, { "op": "+", "args": ["j0", "j"] }, { "op": "+", "args": [{ "op": "index", "args": ["m_c2f", "k"] }, 1] }] },
+                        { "op": "index", "args": ["x", { "op": "+", "args": ["i0", "i"] }, { "op": "+", "args": ["j0", "j"] }, { "op": "index", "args": ["m_c2f", "k"] }] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            { "op": "index", "args": ["x", { "op": "+", "args": ["i0", "i"] }, { "op": "+", "args": ["j0", "j"] }, { "op": "index", "args": ["m_c2f", "k"] }] }
+          ]
+        }
+      }
+    },
+    "energy_fine_to_coarse_field": {
+      "description": "3-D lift of energy_fine_to_coarse (see ./energy_templates.esm for the interpolation documentation): ColumnInterpolation::fine_to_coarse_linear applied to every block column of a fine-grid field E: per storage level l, the bracketing fine level m_f2c[l] and fraction incr_f2c[l] are baked grid parameters, and the storage value is E[m_f2c[l]] + incr_f2c[l]*(E[m_f2c[l]+1] - E[m_f2c[l]]) for l < Mz, and E[m_f2c[l]] at the top storage level l = Mz (the C++ constant branch). This is the map EnthalpyModel::update applies to the post-processed fine-grid enthalpy to produce the storage-grid E_out that the dumps carry.",
+      "params": ["E"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "l"],
+        "args": [],
+        "ranges": {
+          "i": { "from": "i" },
+          "j": { "from": "j" },
+          "l": { "from": "lev" }
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            { "op": "<", "args": ["l", "Mz"] },
+            {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["E", "i", "j", { "op": "index", "args": ["m_f2c", "l"] }] },
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "index", "args": ["incr_f2c", "l"] },
+                    {
+                      "op": "-",
+                      "args": [
+                        { "op": "index", "args": ["E", "i", "j", { "op": "+", "args": [{ "op": "index", "args": ["m_f2c", "l"] }, 1] }] },
+                        { "op": "index", "args": ["E", "i", "j", { "op": "index", "args": ["m_f2c", "l"] }] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            { "op": "index", "args": ["E", "i", "j", { "op": "index", "args": ["m_f2c", "l"] }] }
+          ]
+        }
+      }
+    },
+    "energy_marginal_column_field": {
+      "description": "3-D lift of the marginal-column flag of EnergyModel::marginal: true when ANY of the 8 neighbor cells of the block cell (i,j) is thinner than margin_ice_thickness_limit (the cell itself is not checked), with periodic wrapping in both directions exactly as the PISM ghost exchange (thickness.box). The neighbor offsets are baked parameters di_nb/dj_nb over the small index set nb, the neighbors are read from the full-field thickness H_g at the absolute esm indices (i0+i+di, j0+j+dj) wrapped into 1..31, and the OR over the 8 neighbors is a max-reduction over the contracted index nb. Numeric result: 1.0 if any neighbor is thinner than the margin, else 0.0.",
+      "params": ["H"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j"],
+        "args": [],
+        "reduce": "max",
+        "ranges": {
+          "i": { "from": "i" },
+          "j": { "from": "j" },
+          "nb": { "from": "nb" }
+        },
+        "expr": {
+          "op": "ifelse",
+          "args": [
+            {
+              "op": "<",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "H",
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        { "op": "==", "args": [{ "op": "+", "args": ["i0", "i", { "op": "index", "args": ["di_nb", "nb"] }] }, 0] },
+                        31,
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            { "op": "==", "args": [{ "op": "+", "args": ["i0", "i", { "op": "index", "args": ["di_nb", "nb"] }] }, 32] },
+                            1,
+                            { "op": "+", "args": ["i0", "i", { "op": "index", "args": ["di_nb", "nb"] }] }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "ifelse",
+                      "args": [
+                        { "op": "==", "args": [{ "op": "+", "args": ["j0", "j", { "op": "index", "args": ["dj_nb", "nb"] }] }, 0] },
+                        31,
+                        {
+                          "op": "ifelse",
+                          "args": [
+                            { "op": "==", "args": [{ "op": "+", "args": ["j0", "j", { "op": "index", "args": ["dj_nb", "nb"] }] }, 32] },
+                            1,
+                            { "op": "+", "args": ["j0", "j", { "op": "index", "args": ["dj_nb", "nb"] }] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "margin"
+              ]
+            },
+            1.0,
+            0.0
+          ]
+        }
+      }
+    }
+  }
+}
