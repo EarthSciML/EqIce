@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ssa",
     "description": "PISM shallow-shelf-approximation (SSA) stress-balance component (stage 2 of the eqice project), flow-line form of the PISM verification test V (van der Veen / CFBC shelf): the membrane momentum balance div(4*nu*H*grad u) = rho*g*H*h_x on the 1-D shelf of instrument_ssa.cc, with the SSAFD (PISM) face evaluation of the flux coefficient, the Dirichlet inflow (u = V0 at the left wall, the PISM bc_mask identity row), and the calving-front stress boundary condition (the east-face flux prescribed to delta_p = H*(0.5*rho_i*g*H - P_water), PISM's CFBC). Because the harness cannot solve the implicit/elliptic steady problem directly, the steady SSAFD operator is relaxed by a pseudo-transient: du/dt = U_char*(fluxdiv - rho*g*H*h_x)/(rho*g*H) with U_char a relaxation velocity scale, the Dirichlet row replaced by the penalty du1/dt = (V0 - u1)/tau_dir (u1 = V0 exactly at steady state), and the front row carrying the prescribed flux; the pseudo-time t is DIMENSIONLESS (du/dt then has velocity units, consistent with the right-hand side), and the diffusion time scale L^2/kappa with kappa = U_char*4*nu/(rho*g) is about 3 (dome) to 1e-6 (front-cell penalty) pseudo-time units. t_end = 100 covers ~35 slowest-mode decay times (the fixed point is reached to machine precision by t ~ 30), which is the practical ceiling of the harness's diffsol integration: its finite-difference-Jacobian Newton solver fails past t ~ 108 (BDF, the default) / 290 (SDIRK) pseudo-time units once the solution sits at the fixed point (documented in PROGRESS.md); the measured steady-state residual is 2e-9 to 6e-7 Pa. All shared math is imported by reference from ./ssa_templates.esm (the SSAFD divergence rule, the face stiffness, the surface-gradient rule) and ./ice_rheology_templates.esm (effective_viscosity). The state is the exact test-V shelf: H from the instrumented PISM v2.3.2 run (stage1/dumps/ssa/columns.csv), tau_b = 0 (floating shelf, tauc = 0), isothermal-Glen B = 1.9e8 (dump Bbar), and the Schoof regularization gamma_0 = (1 m/yr / 1000 km)^2 (flow_law.Schoof_regularizing_velocity/length with the 31556926 s year). The steady state reproduces PISM's Picard-converged dump columns u, nuH (faces) and taud_x. Deferred to later stages: the full 2-D SSA (y-momentum, v, the cross-coupling terms of SSAFDBase::assemble_matrix), basal drag (tau_b = beta*u, plastic/pseudo-plastic laws; the beta row is trivial to add to the rule), and the Picard/KSP solver used by the C++ model (the pseudo-transient reaches the same fixed point)."
@@ -196,7 +196,7 @@
             "expr": {
               "op": "*",
               "args": [
-                5.7039776353473284e-03,
+                {"op": "const", "args": [], "value": 5.7039776353473284e-03, "units": "m/s"},
                 {
                   "op": "^",
                   "args": [

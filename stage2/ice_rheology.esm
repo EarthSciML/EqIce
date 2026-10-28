@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ice_rheology",
     "description": "PISM ice-rheology component (stage 2 of the eqice project): the enthalpy converter (E,p -> T, T_pa, omega, is_temperate, E_cts, E_l, T_m), the Glen-Nye flow laws selectable through FlowLawFactory (isothermal Glen, Paterson-Budd, Arrhenius cold/warm, GPBLD, Hooke, Goldsby-Kohlstedt), the regularized effective viscosity, and the shallow-shelf second invariant. All shared math is imported by reference from ./ice_rheology_templates.esm. Tests assert the instantaneous FlowLaw/EnthalpyConverter/effective-viscosity/second-invariant boundary outputs dumped by the instrumented PISM v2.3.2 run (stage1/dumps/rheology/)."
@@ -5170,7 +5170,7 @@
                       "stress"
                     ]
                   },
-                  1e-10
+                  {"op": "const", "args": [], "value": 1e-10, "units": "Pa"}
                 ]
               },
               0.0,
