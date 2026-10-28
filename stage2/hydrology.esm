@@ -1,5 +1,5 @@
 {
- "esm": "1.1.0",
+ "esm": "1.2.0",
  "metadata": {
   "name": "hydrology",
   "description": "PISM subglacial-hydrology component (stage 2 of the eqice project): the Routing (Shreve) model q = -K grad psi, psi = P_over + rho_w g (b + W), of hydrology::Routing on the 31 x 31 test-F geometry, as a continuous PDE integrated by the harness over one dt = 0.25 yr update step: the till-storage equation dWtill/dt = clip(surface + basal - C, 0, tillwat_max) (projected rate), the transportable-water equation dW/dt = surface + basal - dWtill/dt - div(V W) + div(D grad W) with the edge velocity V = -K grad R, R = P_over + rho_w g b, the nonlinear conductivity K = k W^(alpha-1) (Pi + eps^2)^((beta-2)/2) (eps = 1 for beta < 2), first-order-upwind advective edge flux Q = V W_upwind, the edge diffusion D = rho_w g K Wstag, and the time-averaged regular-grid advective flux flux_u/flux_v = (1/dt) integral Q dt mapped staggered-to-regular with the grounded-ice mask. All shared math is imported by reference from ./hydrology_templates.esm. The forcing (constant surface input 0.2 m/yr, dome-centered basal melt blob 0.1 m/yr exp(-(r/200km)^2), sliding speed ignored by Routing), geometry, and initial state (W_till = 0, W = 0.5 m exp(-(r/150km)^2)) are prescribed as in the instrumented PISM v2.3.2 run of stage1/runs/hydrology.json. The initial state is declared as unknown defaults (the exact dumped W field and zero W_till/flux): the native compiler's build-time initial-condition scope cannot evaluate the observed definitions that read the state (they must be overlay-able parameter/const gathers; see the ssa.esm comments), so the component carries no ic equations and the t = 0 field values are the defaults (esm-spec 6.3). Tests pin the initial state exactly, the pointwise flux law to 1e-12, the staggered operators (Wstag/Kstag/Vstag/Qstag) pointwise at the initial state, the one-step evolution (W_out, W_till_out, overburden, flux) at selected cells, and the central anti-symmetry of the flux field. The C++ integrates the same equations with 19 explicit internal substeps capped by the CFL limit; the harness integrates the continuous ODE, so the one-step agreement reflects the documented Euler-vs-ODE scheme gap (see the test descriptions). Distributed/NullTransport/SteadyState and the effective-pressure coupling to basal strength are deferred to stage 3."
@@ -4668,7 +4668,7 @@
           "j"
          ]
         },
-        0.01
+        {"op": "const", "args": [], "value": 0.01, "units": "m"}
        ]
       }
      }
